@@ -14,6 +14,25 @@ type Intent =
   | "flirt"
   | "general";
 
+type CoachReply = {
+  message?: string;
+  reply?: string;
+  text?: string;
+  advice?: string;
+  error?: string;
+};
+
+function extractMessage(data: unknown): string {
+  if (typeof data === "string") return data;
+  if (data && typeof data === "object") {
+    const d = data as any;
+    return (
+      d.message ?? d.reply ?? d.text ?? d.advice ?? (d.error ? `Error: ${d.error}` : "")
+    );
+  }
+  return "";
+}
+
 function norm(s = "") {
   return s.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -213,7 +232,7 @@ export async function coachBrainV2(body: {
   sessionId: string;
   userMessage: string;
   mode?: Mode;
-}) {
+}): Promise<{ message: string }> {
   const sessionId = body.sessionId;
   const mode: Mode = body.mode === "rizz" ? "rizz" : "dating_advice";
   const msg = (body.userMessage || "").trim();
@@ -227,11 +246,12 @@ export async function coachBrainV2(body: {
 
   if (useLLM) {
     try {
-      reply = await llmAssist({ mode, userMessage: msg, sessionId, intent });
+      const raw = await llmAssist({ mode, userMessage: msg, sessionId, intent });
+      reply = extractMessage(raw);
       // ensure short, single assistant message
       if (reply) reply = reply.split(/\n{2,}/).map(s => s.trim()).join("\n\n");
     } catch (err) {
-      console.warn("llmAssist error:", err?.message || err);
+      console.warn("llmAssist error:", (err as any)?.message || err);
       reply = "";
     }
   }
@@ -258,5 +278,7 @@ export async function coachBrainV2(body: {
     }
   }
 
-  return { message: clamp(reply) };
+  const out = clamp(reply || "");
+  if (!out) return { message: "Sorry, I couldn't generate a reply right now." };
+  return { message: out };
 }
