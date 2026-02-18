@@ -287,19 +287,184 @@ function buildPlan(topic: Topic): CoachOutput["plan"] {
   };
 }
 
-export function coachRespond(input: CoachInput): CoachOutput {
-  const safety = safeGuardrails(input.userMessage);
-  const topic = detectTopic(input.userMessage);
-  const tone = tonePick(input.tone);
+type Tone = "confident" | "playful" | "sweet" | "direct";
+type Vibe = "smooth" | "rizz" | "soft" | "grown" | "chill";
 
-  const strategy = buildStrategy(topic, tone);
-  const replies = buildReplies(topic);
-  const plan = buildPlan(topic);
+function pickVibe(input?: string): Vibe {
+  const t = (input || "").toLowerCase();
+  if (t.includes("rizz")) return "rizz";
+  if (t.includes("soft")) return "soft";
+  if (t.includes("grown")) return "grown";
+  if (t.includes("chill")) return "chill";
+  return "smooth";
+}
 
-  // Add NVC coaching tips when appropriate
-  if (topic === "conflict" || topic === "family") {
-    strategy.do.unshift(...makeNVC(input.userMessage).slice(0, 2));
+function cap(s: string, max = 220) {
+  const out = s.trim();
+  return out.length > max ? out.slice(0, max - 1).trim() + "…" : out;
+}
+
+function addFlavor(text: string, vibe: Vibe, tone: Tone) {
+  // Keep it tasteful. Minimal emojis. No forced slang.
+  const emoji = (e: string) => (tone === "direct" ? "" : ` ${e}`);
+  const softener = (x: string) => (tone === "direct" ? x : x);
+
+  if (vibe === "rizz") {
+    return (
+      softener(
+        text
+          .replace("Do you want to", "You tryna")
+          .replace("Want to", "You tryna")
+          .replace("Are you free", "You free")
+          .replace("this week", "this week")
+      ) + emoji("😌")
+    );
   }
 
-  return { strategy, replies, plan, safety };
+  if (vibe === "chill") {
+    return text + emoji("🤝");
+  }
+
+  if (vibe === "soft") {
+    return text.replace("Let’s", "I’d love to") + emoji("🙂");
+  }
+
+  if (vibe === "grown") {
+    return text
+      .replace("Haha", "Fair")
+      .replace("lol", "")
+      .replace("😌", "")
+      .trim();
+  }
+
+  return text + (tone === "playful" ? " 😄" : tone === "sweet" ? " 🙂" : "");
+}
+
+function threePart(main: string, alt: string, q: string, vibe: Vibe, tone: Tone) {
+  const m = addFlavor(main, vibe, tone);
+  const a = addFlavor(alt, vibe, tone);
+  const question = cap(q, 120);
+  return {
+    message: cap(`${m}\n\nAlt: ${a}\n\nQuick q: ${question}`, 380),
+  };
+}
+
+function scriptsByIntent(intent: string, tone: Tone, vibe: Vibe) {
+  switch (intent) {
+    case "ask_out":
+      return threePart(
+        `Say: "You seem fun. Let’s link this week—Thu or Sat?"`,
+        `"Keep it simple—coffee or a quick drink. When you free?"`,
+        "Is this a first link or y’all already been talking?",
+        vibe,
+        tone
+      );
+
+    case "no_reply":
+      return threePart(
+        `Say: "All good. When you’re free, we can pick a day."`,
+        `"You good? Still down to link this week?"`,
+        "How long has it been—hours, a day, or a few days?",
+        vibe,
+        tone
+      );
+
+    case "apology":
+      return threePart(
+        `Say: "You right. I came wrong—my bad. I’ll move better."`,
+        `"I hear you. I’m sorry. Can we reset?"`,
+        "Do you want to fix it, or are you ready to step back?",
+        vibe,
+        tone
+      );
+
+    case "conflict":
+      return threePart(
+        `Say: "I’m not tryna go back and forth over text. Quick call later?"`,
+        `"I get you. Let’s talk when we’re both calm."`,
+        "What’s the ONE outcome you want from the talk?",
+        vibe,
+        tone
+      );
+
+    case "trust":
+      return threePart(
+        `Say: "I need the truth, straight up. Is there anything you haven’t told me?"`,
+        `"I’m not here to argue—I just need honesty so I can decide."`,
+        "Do you have proof, or is it a gut feeling?",
+        vibe,
+        tone
+      );
+
+    case "boundary":
+      return threePart(
+        `Say: "I’m not cool with that. If it happens again, I’m stepping back."`,
+        `"Respectfully, that doesn’t work for me. I need it to stop."`,
+        "What exact behavior are you setting the boundary on?",
+        vibe,
+        tone
+      );
+
+    case "define_relationship":
+      return threePart(
+        `Say: "I like you. What are we doing—casual, or building something?"`,
+        `"I’m feeling you. You on the same page or nah?"`,
+        "If they say ‘casual’, are you staying or dipping?",
+        vibe,
+        tone
+      );
+
+    case "intimacy":
+      return threePart(
+        `Say: "I’m into you. I want us to move at a pace that feels good for both."`,
+        `"What pace feels right for you?"`,
+        "Do you want more closeness, or more clarity first?",
+        vibe,
+        tone
+      );
+
+    case "what_to_say":
+      return threePart(
+        `Paste exactly what they said + what you want. I’ll write a clean 1–2 sentence text.`,
+        `Drop the last 2 messages and your goal—I got you.`,
+        "Is their energy warm, dry, or confusing?",
+        vibe,
+        tone
+      );
+
+    default:
+      return threePart(
+        `Tell me what happened in one sentence + what you want. I’ll tell you exactly what to say.`,
+        `Copy/paste the last message they sent.`,
+        "Are you trying to set a date, fix tension, or set a boundary?",
+        vibe,
+        tone
+      );
+  }
+}
+
+function detectIntent(text: string) {
+  const t = (text || "").toLowerCase();
+  if (t.includes("ask") || t.includes("date") || t.includes("link") || t.includes("meet up") || t.includes("first date")) return "ask_out";
+  if (t.includes("no response") || t.includes("ghost") || t.includes("no reply") || t.includes("left on read")) return "no_reply";
+  if (t.includes("sorry") || t.includes("my bad") || t.includes("apolog")) return "apology";
+  if (t.includes("fight") || t.includes("argue") || t.includes("mad")) return "conflict";
+  if (t.includes("cheat") || t.includes("lying") || t.includes("cheated")) return "trust";
+  if (t.includes("boundary") || t.includes("not cool") || t.includes("respect")) return "boundary";
+  if (t.includes("what do i say") || t.includes("reply") || t.includes("respond") || t.includes("what to say")) return "what_to_say";
+  if (t.includes("intimacy") || t.includes("sex") || t.includes("close") || t.includes("touch")) return "intimacy";
+  if (t.includes("what are we") || t.includes("define the relationship") || t.includes("dtr") || t.includes("are we")) return "define_relationship";
+  return "default";
+}
+
+export function coachRespond(body: { userMessage: string; tone?: string; vibe?: string }) {
+  const tone: Tone =
+    (body.tone?.toLowerCase().includes("play") ? "playful" :
+    body.tone?.toLowerCase().includes("sweet") ? "sweet" :
+    body.tone?.toLowerCase().includes("direct") ? "direct" : "confident");
+
+  const vibe = pickVibe(body.vibe);
+
+  const intent = detectIntent(body.userMessage);
+  return scriptsByIntent(intent, tone, vibe);
 }

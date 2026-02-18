@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { z } from "zod";
+import crypto from "crypto";
 
 const app = express();
 
@@ -16,6 +17,38 @@ app.use(
 	})
 );
 app.use(express.json({ limit: "1mb" }));
+
+// Simple in-memory session store keyed by a session id sent in `x-session-id` header
+type SessionData = { conversationHistory: Array<{ role: "user" | "assistant"; content: string }> };
+const sessions = new Map<string, SessionData>();
+
+// Middleware: ensure a session id and attach session data to request
+app.use((req, res, next) => {
+	let sid = req.headers["x-session-id"] as string | undefined;
+
+	// If cookie header contains sid=..., prefer that if header not provided
+	if (!sid && typeof req.headers.cookie === "string") {
+		const match = req.headers.cookie.match(/(?:^|; )sid=([^;]+)/);
+		if (match) sid = decodeURIComponent(match[1]);
+	}
+
+	if (!sid) {
+		sid = crypto.randomBytes(12).toString("hex");
+		// expose new sid to client so it can be reused
+		res.setHeader("x-session-id", sid);
+		// also set a cookie for convenience (frontend can persist it)
+		res.setHeader("Set-Cookie", `sid=${sid}; Path=/; HttpOnly`);
+	}
+
+	if (!sessions.has(sid)) {
+		sessions.set(sid, { conversationHistory: [] });
+	}
+
+	// attach to request (as any to avoid TS type noise)
+	(req as any).sessionId = sid;
+	(req as any).sessionData = sessions.get(sid);
+	next();
+});
 
 /* ===============================
 	 REQUEST VALIDATION
@@ -365,51 +398,199 @@ function buildDatePlan(topic: string) {
 	};
 }
 
-function generateConversationalCoach(body: AdviceRequest) {
-	const tone = normalizeTone(body.tone);
-	const userMessage = (body.userMessage || "").trim().toLowerCase();
+type Tone = "confident" | "playful" | "sweet" | "direct";
+type Vibe = "smooth" | "rizz" | "soft" | "grown" | "chill";
+
+function pickVibe(input?: string): Vibe {
+	const t = (input || "").toLowerCase();
+	if (t.includes("rizz")) return "rizz";
+	if (t.includes("soft")) return "soft";
+	if (t.includes("grown")) return "grown";
+	if (t.includes("chill")) return "chill";
+	return "smooth";
+}
+
+function cap(s: string, max = 220) {
+	const out = s.trim();
+	return out.length > max ? out.slice(0, max - 1).trim() + "…" : out;
+}
+
+function addFlavor(text: string, vibe: Vibe, tone: Tone) {
+	const emoji = (e: string) => (tone === "direct" ? "" : ` ${e}`);
+	const softener = (x: string) => (tone === "direct" ? x : x);
+
+	if (vibe === "rizz") {
+		return (
+			softener(
+				text
+					.replace("Do you want to", "You tryna")
+					.replace("Want to", "You tryna")
+					.replace("Are you free", "You free")
+					.replace("this week", "this week")
+			) + emoji("😌")
+		);
+	}
+
+	if (vibe === "chill") {
+		return text + emoji("🤝");
+	}
+
+	if (vibe === "soft") {
+		return text.replace("Let’s", "I’d love to") + emoji("🙂");
+	}
+
+	if (vibe === "grown") {
+		return text
+			.replace("Haha", "Fair")
+			.replace("lol", "")
+			.replace("😌", "")
+			.trim();
+	}
+
+	return text + (tone === "playful" ? " 😄" : tone === "sweet" ? " 🙂" : "");
+}
+
+function threePart(main: string, alt: string, q: string, vibe: Vibe, tone: Tone) {
+	const m = addFlavor(main, vibe, tone);
+	const a = addFlavor(alt, vibe, tone);
+	const question = cap(q, 120);
+	return {
+		message: cap(`${m}\n\nAlt: ${a}\n\nQuick q: ${question}`, 380),
+	};
+}
+
+function scriptsByIntent(intent: string, tone: Tone, vibe: Vibe) {
+	switch (intent) {
+		case "ask_out":
+			return threePart(
+				`Say: "You seem fun. Let’s link this week—Thu or Sat?"`,
+				`"Keep it simple—coffee or a quick drink. When you free?"`,
+				"Is this a first link or y’all already been talking?",
+				vibe,
+				tone
+			);
+
+		case "no_reply":
+			return threePart(
+				`Say: "All good. When you’re free, we can pick a day."`,
+				`"You good? Still down to link this week?"`,
+				"How long has it been—hours, a day, or a few days?",
+				vibe,
+				tone
+			);
+
+		case "apology":
+			return threePart(
+				`Say: "You right. I came wrong—my bad. I’ll move better."`,
+				`"I hear you. I’m sorry. Can we reset?"`,
+				"Do you want to fix it, or are you ready to step back?",
+				vibe,
+				tone
+			);
+
+		case "conflict":
+			return threePart(
+				`Say: "I’m not tryna go back and forth over text. Quick call later?"`,
+				`"I get you. Let’s talk when we’re both calm."`,
+				"What’s the ONE outcome you want from the talk?",
+				vibe,
+				tone
+			);
+
+		case "trust":
+			return threePart(
+				`Say: "I need the truth, straight up. Is there anything you haven’t told me?"`,
+				`"I’m not here to argue—I just need honesty so I can decide."`,
+				"Do you have proof, or is it a gut feeling?",
+				vibe,
+				tone
+			);
+
+		case "boundary":
+			return threePart(
+				`Say: "I’m not cool with that. If it happens again, I’m stepping back."`,
+				`"Respectfully, that doesn’t work for me. I need it to stop."`,
+				"What exact behavior are you setting the boundary on?",
+				vibe,
+				tone
+			);
+
+		case "define_relationship":
+			return threePart(
+				`Say: "I like you. What are we doing—casual, or building something?"`,
+				`"I’m feeling you. You on the same page or nah?"`,
+				"If they say ‘casual’, are you staying or dipping?",
+				vibe,
+				tone
+			);
+
+		case "intimacy":
+			return threePart(
+				`Say: "I’m into you. I want us to move at a pace that feels good for both."`,
+				`"What pace feels right for you?"`,
+				"Do you want more closeness, or more clarity first?",
+				vibe,
+				tone
+			);
+
+		case "what_to_say":
+			return threePart(
+				`Paste exactly what they said + what you want. I’ll write a clean 1–2 sentence text.`,
+				`Drop the last 2 messages and your goal—I got you.`,
+				"Is their energy warm, dry, or confusing?",
+				vibe,
+				tone
+			);
+
+		default:
+			return threePart(
+				`Tell me what happened in one sentence + what you want. I’ll tell you exactly what to say.`,
+				`Copy/paste the last message they sent.`,
+				"Are you trying to set a date, fix tension, or set a boundary?",
+				vibe,
+				tone
+			);
+	}
+}
+
+function inferIntent(text: string) {
+	const t = text.toLowerCase();
+	if (t.includes("ask") || t.includes("date") || t.includes("link") || t.includes("meet up") || t.includes("first date") ) return "ask_out";
+	if (t.includes("no response") || t.includes("ghost") || t.includes("no reply") || t.includes("left on read")) return "no_reply";
+	if (t.includes("sorry") || t.includes("my bad") || t.includes("apolog")) return "apology";
+	if (t.includes("fight") || t.includes("argue") || t.includes("mad")) return "conflict";
+	if (t.includes("cheat") || t.includes("lying") || t.includes("cheated")) return "trust";
+	if (t.includes("boundary") || t.includes("not cool") || t.includes("respect")) return "boundary";
+	if (t.includes("what do i say") || t.includes("reply") || t.includes("respond") || t.includes("what to say")) return "what_to_say";
+	if (t.includes("intimacy") || t.includes("sex") || t.includes("close") || t.includes("touch")) return "intimacy";
+	if (t.includes("what are we") || t.includes("define the relationship") || t.includes("dtr") || t.includes("are we")) return "define_relationship";
+	return "default";
+}
+
+function inferToneFromHistory(history?: SessionData["conversationHistory"]) {
+	if (!history || history.length === 0) return "confident" as Tone;
+	const recent = history.slice(-6).map((m) => m.content.toLowerCase()).join(" ");
+	if (recent.match(/😄|😂|lol|haha|:\)|:D/)) return "playful" as Tone;
+	if (recent.match(/sorry|i'm sorry|i am sorry|sad|hurt|missing you|miss you/)) return "sweet" as Tone;
+	if (recent.match(/what do you want|clarity|are we|are we doing|are you free|now\?|right now/)) return "direct" as Tone;
+	return "confident" as Tone;
+}
+
+function generateConversationalCoach(body: AdviceRequest, session?: SessionData) {
+	const inferredTone = normalizeTone(body.tone) as Tone;
+	const userMessage = (body.userMessage || "").trim();
 
 	const short = (text: string) => text.slice(0, 350); // force shorter replies
 
-	// If user is confused / asking what to say
-	if (userMessage.includes("what do i say") || userMessage.includes("reply") || userMessage.includes("respond")) {
-		return {
-			message: short(
-				"Okay. Before I give you a reply — what’s the vibe? Are they warm, dry, or unsure?"
-			)
-		};
-	}
+	const recentTone = inferToneFromHistory(session?.conversationHistory);
+	const effectiveTone = (recentTone || inferredTone || "confident") as Tone;
+	const vibe = pickVibe(body.tone || body.goal || body.situation || body.userMessage);
+	const intent = inferIntent(userMessage.toLowerCase());
 
-	if (userMessage.includes("lol") || userMessage.includes("sure")) {
-		return {
-			message: short(
-				"That’s neutral energy. Don’t overthink it.\n\nTry: “Haha fair. What day works this week?”\n\nKeep it light."
-			)
-		};
-	}
+	const script = scriptsByIntent(intent, effectiveTone, vibe);
 
-	if (userMessage.includes("she's mad") || userMessage.includes("he's mad") || userMessage.includes("argue")) {
-		return {
-			message: short(
-				"Don’t solve it over text.\n\nSay: “I don’t want to argue. Can we talk later and reset?”\n\nDe-escalate first."
-			)
-		};
-	}
-
-	if (userMessage.includes("cheat") || userMessage.includes("lying")) {
-		return {
-			message: short(
-				"Okay. That’s serious.\n\nAsk directly: “Is there anything you haven’t told me?”\n\nCalm voice. No accusations."
-			)
-		};
-	}
-
-	// Default conversational fallback
-	return {
-		message: short(
-			"Tell me exactly what they said and what you want to happen.\n\nI’ll help you respond the right way."
-		)
-	};
+	// ensure returned object shape
+	return { message: short(script.message) };
 }
 
 // POST-only advice endpoint (conversational local coach)
@@ -420,7 +601,35 @@ app.post("/api/advice", (req, res) => {
 		return res.status(400).json({ error: "Missing userMessage (string)" });
 	}
 
-	const data = generateConversationalCoach(body);
+	const session = (req as any).sessionData as SessionData | undefined;
+
+	// store the incoming user message in session conversationHistory (keep last 10)
+	try {
+		if (session) {
+			session.conversationHistory.push({ role: "user", content: body.userMessage });
+			if (session.conversationHistory.length > 10) {
+				session.conversationHistory = session.conversationHistory.slice(-10);
+			}
+		}
+	} catch (err) {
+		// ignore session write errors — best-effort memory
+		console.warn("session write error", err);
+	}
+
+	const data = generateConversationalCoach(body, session);
+
+	// store assistant reply into session as well
+	try {
+		if (session && typeof data?.message === "string") {
+			session.conversationHistory.push({ role: "assistant", content: data.message });
+			if (session.conversationHistory.length > 10) {
+				session.conversationHistory = session.conversationHistory.slice(-10);
+			}
+		}
+	} catch (err) {
+		console.warn("session write error", err);
+	}
+
 	return res.json(data);
 });
 
