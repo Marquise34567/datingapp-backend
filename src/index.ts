@@ -1,7 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import { adviceRouter } from './routes/advice';
+import { adviceRouter } from './routes/advice.js';
 
 const app = express();
 
