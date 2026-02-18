@@ -7,6 +7,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Health endpoints (Railway uptime checks)
+app.get('/', (_req, res) => {
+  res.status(200).send('OK');
+});
+
+app.get('/api/health', (_req, res) => {
+  res.status(200).json({ ok: true });
+});
+
 app.use('/api/advice', adviceRouter);
 
 const port = process.env.PORT || 4000;
