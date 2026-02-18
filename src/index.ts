@@ -211,60 +211,46 @@ app.post("/api/advice", async (req, res) => {
 			},
 		];
 
-		const response = await openai.responses.create({
-			model: "gpt-4o-mini",
-			input,
-			// Structured Outputs (JSON schema)
-			text: {
-				format: {
-					type: "json_schema",
-					name: "dating_advice",
-					schema: {
-						type: "object",
-						additionalProperties: false,
-						properties: {
-							strategy: {
-								type: "object",
-								additionalProperties: false,
-								properties: {
-									headline: { type: "string" },
-									why: { type: "string" },
-									do: { type: "array", items: { type: "string" } },
-									dont: { type: "array", items: { type: "string" } },
-								},
-								required: ["headline", "why", "do", "dont"],
-							},
-							replies: {
-								type: "object",
-								additionalProperties: false,
-								properties: {
-									confident: { type: "array", items: { type: "string" } },
-									playful: { type: "array", items: { type: "string" } },
-									sweet: { type: "array", items: { type: "string" } },
-									direct: { type: "array", items: { type: "string" } },
-								},
-								required: ["confident", "playful", "sweet", "direct"],
-							},
-							datePlan: {
-								type: "object",
-								additionalProperties: false,
-								properties: {
-									idea: { type: "string" },
-									textToSend: { type: "string" },
-									logistics: { type: "array", items: { type: "string" } },
-								},
-								required: ["idea", "textToSend", "logistics"],
-							},
-						},
-						required: ["strategy", "replies", "datePlan"],
-					},
-				},
+		const messages: Array<{ role: "system" | "user"; content: string }> = [
+			{
+				role: "system",
+				content:
+					"You are DateCoach: a premium dating coach. Give practical, respectful, non-manipulative advice. " +
+					"Prioritize clarity, confidence, and consent. Keep texts short (1–2 sentences). " +
+					"Return ONLY valid JSON matching this schema:\n" +
+					"{ strategy: {headline:string, why:string, do:string[], dont:string[] }, " +
+					"replies: {confident:string[], playful:string[], sweet:string[], direct:string[]}, " +
+					"datePlan: {idea:string, textToSend:string, logistics:string[]} }",
 			},
+			{
+				role: "user",
+				content: JSON.stringify({
+					situation: situation ?? "General",
+					goal: goal ?? "Get the best next message",
+					tone: tone ?? "confident",
+					conversation: Array.isArray(conversation) ? conversation : [],
+					userMessage,
+				}),
+			},
+		];
+
+		const completion = await openai.chat.completions.create({
+			model: "gpt-4o-mini",
+			messages,
+			temperature: 0.7,
 		});
 
-		// The SDK returns structured JSON in the text output
-		const jsonText = response.output_text; // string of JSON
-		const data = JSON.parse(jsonText);
+		const text = completion.choices?.[0]?.message?.content ?? "{}";
+		let data: any;
+
+		try {
+			data = JSON.parse(text);
+		} catch {
+			const firstBrace = text.indexOf("{");
+			const lastBrace = text.lastIndexOf("}");
+			const sliced = firstBrace !== -1 && lastBrace !== -1 ? text.slice(firstBrace, lastBrace + 1) : "{}";
+			data = JSON.parse(sliced);
+		}
 
 		return res.json(data);
 	} catch (err: any) {
