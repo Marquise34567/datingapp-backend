@@ -1,7 +1,6 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import type { CorsOptions } from "cors";
 import { z } from "zod";
 
 const app = express();
@@ -15,7 +14,7 @@ const allowedOrigins = [
 
 const ALLOWED_ORIGINS = new Set(allowedOrigins);
 
-const corsOptions: CorsOptions = {
+const corsOptions = {
 	credentials: true,
 	origin: (
 		origin: string | undefined,
