@@ -220,6 +220,14 @@ app.get("/api/health", (req, res) => {
 	res.json({ ok: true });
 });
 
+// Helper GET to make testing from browsers easier — POST is primary
+app.get("/api/advice", (_req, res) => {
+	res.status(200).json({
+		ok: true,
+		note: "This endpoint is POST-only. Send a POST request to /api/advice with JSON body.",
+	});
+});
+
 /* ===============================
 	 START SERVER
 ================================ */
