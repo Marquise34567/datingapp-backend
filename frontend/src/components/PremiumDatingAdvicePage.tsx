@@ -6,7 +6,7 @@ import Button from "./ui/Button";
 import Composer from "./ui/Composer";
 import { createCheckoutSession } from "../lib/checkout";
 
-type Msg = { id: string; role: "user" | "assistant"; text: string };
+type Msg = { id: string; role: "user" | "assistant"; text: string; image?: string };
 
 // Quick actions removed per request
 
@@ -29,6 +29,7 @@ export default function PremiumDatingAdvicePage() {
     },
   ]);
   const [input, setInput] = useState("");
+  const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
@@ -171,6 +172,37 @@ export default function PremiumDatingAdvicePage() {
     }
   }
 
+  async function handleImageUpload(file: File) {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'user', text: 'Uploaded screenshot', image: url }]);
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('image', file);
+      const r = await fetch('/api/screenshot-coach', { method: 'POST', body: fd });
+      const json = await r.json();
+      if (!json || !json.ok) {
+        setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'assistant', text: `Error: ${json?.error || 'Unknown'}` }]);
+      } else {
+        const parts: string[] = [];
+        if (json.summary) parts.push(`Summary: ${json.summary}`);
+        if (json.vibe) parts.push(`Vibe: ${json.vibe}`);
+        if (json.advice) parts.push(`Advice: ${json.advice}`);
+        if (json.best_reply) parts.push(`Best reply (copy/paste): ${json.best_reply}`);
+        if (json.alt_replies && Array.isArray(json.alt_replies) && json.alt_replies.length) parts.push(`Alternates: ${json.alt_replies.join(' || ')}`);
+        if (json.warning) parts.push(`Warning: ${json.warning}`);
+        if (json.question) parts.push(`Question: ${json.question}`);
+        setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'assistant', text: parts.join('\n\n') }]);
+      }
+    } catch (err: any) {
+      setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'assistant', text: `Error: ${err?.message || String(err)}` }]);
+    } finally {
+      setUploading(false);
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }
+  }
+
   return (
     <div className="min-h-screen app-bg">
       {/* Top Nav */}
@@ -183,7 +215,7 @@ export default function PremiumDatingAdvicePage() {
               </svg>
             </div>
             <div className="leading-tight">
-              <div className="text-sm font-semibold gradient-text">Sparky</div>
+              <div className="text-sm font-semibold gradient-text">Sparkd</div>
               <div className="text-xs text-zinc-500">Modern dating coach</div>
             </div>
           </div>
@@ -227,7 +259,7 @@ export default function PremiumDatingAdvicePage() {
                   </svg>
                 </div>
                 <div>
-                  <div className="text-sm font-semibold">Sparky</div>
+                  <div className="text-sm font-semibold">Sparkd</div>
                   <div className="text-xs text-zinc-500">Premium advice</div>
                 </div>
               </div>
@@ -263,6 +295,7 @@ export default function PremiumDatingAdvicePage() {
                     setInput={(s) => setInput(s)}
                     onSend={(t) => pushUser(t)}
                     onQuickAnalyze={(t) => pushStrategy(t)}
+                    /* Image upload disabled (coming soon) */
                     loading={loading}
                     placeholder={placeholderText}
                   />
@@ -339,7 +372,7 @@ export default function PremiumDatingAdvicePage() {
           <div className="fixed inset-0 z-50">
             <div className="absolute inset-0 bg-black/50" onClick={() => setShowModal(false)} />
 
-            <div className="relative z-10 flex min-h-screen items-center justify-center p-4">
+            <div className="relative z-10 flex min-h-full items-center justify-center p-4">
               <div role="dialog" aria-modal="true" className="w-full max-w-xl rounded-2xl border border-zinc-200 bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start p-6">
                   <div className="lg:col-span-2">
@@ -352,7 +385,7 @@ export default function PremiumDatingAdvicePage() {
                     </div>
 
                     <div className="mt-6 flex items-center gap-6">
-                      <div className="text-4xl font-extrabold">$19<span className="text-base font-medium text-zinc-400">/mo</span></div>
+                      <div className="text-4xl font-extrabold">$12.99<span className="text-base font-medium text-zinc-400">/mo</span></div>
                       <div className="rounded-full px-3 py-1 text-xs font-semibold text-white" style={{ background: 'linear-gradient(90deg,#ff7a59,#ff4d8d)' }}>Popular</div>
                     </div>
 
@@ -399,7 +432,7 @@ export default function PremiumDatingAdvicePage() {
         )}
 
         <footer className="mt-10 text-center text-xs text-zinc-400">
-          © {new Date().getFullYear()} Sparky • Premium UI (backend coming next)
+          © {new Date().getFullYear()} Sparkd • Premium UI (backend coming next)
         </footer>
       </main>
     </div>

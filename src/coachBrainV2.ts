@@ -95,7 +95,7 @@ async function llmAssist(opts: { mode: Mode; userMessage: string; sessionId: str
 - Words to say: 2–4 short message options labeled by tone.
 - Ask at most one targeted clarifying question, only if needed.
 
-For `strategy` mode: focus on big-picture assessment, quick verdict, timeline, and one prioritized next move. Output short paragraphs and bullets, 6–12 lines total. No fluff.`;
+For 'strategy' mode: focus on big-picture assessment, quick verdict, timeline, and one prioritized next move. Output short paragraphs and bullets, 6–12 lines total. No fluff.`;
   const baseSystem = `You are Spark — an elite, human dating coach (top 1%). You respond like a real person: warm, sharp, emotionally intelligent, decisive.
 
 NON-NEGOTIABLE RULES:

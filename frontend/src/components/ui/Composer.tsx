@@ -15,6 +15,7 @@ interface ComposerProps {
   placeholder?: string;
   disabledSend?: boolean;
   isPremium?: boolean;
+  onUpload?: (file: File) => void;
 }
 
 const Composer: React.FC<ComposerProps> = ({
@@ -28,8 +29,10 @@ const Composer: React.FC<ComposerProps> = ({
   placeholder,
   disabledSend = false,
   isPremium = false,
+  onUpload,
 }) => {
   const taRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const ta = taRef.current;
@@ -90,6 +93,38 @@ const Composer: React.FC<ComposerProps> = ({
 
           </div>
         <div className="flex items-center gap-2">
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files && e.target.files[0];
+              if (!f) return;
+              if (!/^image\/(png|jpeg|webp)$/.test(f.type)) return alert('Only PNG/JPEG/WEBP allowed');
+              if (f.size > 8 * 1024 * 1024) return alert('File too large (max 8MB)');
+              if (onUpload) onUpload(f);
+              e.currentTarget.value = '';
+            }}
+          />
+
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            onClick={() => { /* upload coming soon */ }}
+            aria-label="Upload screenshot (coming soon)"
+            title="Upload screenshot — coming soon"
+            className="flex items-center gap-2"
+            disabled={true}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-white">
+              <rect x="3" y="7" width="18" height="14" rx="2" ry="2" />
+              <circle cx="12" cy="13" r="3" />
+              <path d="M8 7l1-2h6l1 2" />
+            </svg>
+            Upload (coming soon)
+          </Button>
           <Button
             type="button"
             variant="ghost"

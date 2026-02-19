@@ -1,8 +1,9 @@
 export async function createCheckoutSession(sessionId?: string) {
-  const res = await fetch(`/api/checkout`, {
+  const res = await fetch(`/api/billing/create-checkout-session`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ uid: sessionId }),
+    credentials: 'include',
+    body: JSON.stringify({ sessionId }),
   });
 
   const text = await res.text();
