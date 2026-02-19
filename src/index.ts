@@ -249,29 +249,13 @@ function detectTopic(text: string) {
 
 function buildReplies(tone: string, topic: string, userMessage: string) {
 	// Keep all replies short (1–2 sentences)
-	const confident = [
-		"I’m down. What day works this week?",
-		"Let’s keep it simple—when are you free?",
-		"I like you. Let’s make a plan."
-	];
+	const confident = ["AI is temporarily unavailable. Please try again."];
 
-	const playful = [
-		"Okay bet 😄 when are we doing this?",
-		"Cool—don’t tease me. What day you free?",
-		"Say less. Pick a day 😌"
-	];
+	const playful = ["AI is temporarily unavailable. Please try again."];
 
-	const sweet = [
-		"I’d like that. What day works for you?",
-		"That sounds nice—when are you free this week?",
-		"I’m happy you said that. Let’s make a plan."
-	];
+	const sweet = ["AI is temporarily unavailable. Please try again."];
 
-	const direct = [
-		"When are you free to talk about this?",
-		"What do you want from me going forward?",
-		"I need clarity—are we doing this or not?"
-	];
+	const direct = ["AI is temporarily unavailable. Please try again."];
 
 	// Topic-specific “best reply” bias
 	if (topic === "family") {
