@@ -581,6 +581,8 @@ function inferToneFromHistory(history?: SessionData["conversationHistory"]) {
 // generateConversationalCoach replaced by coachRespond in coachEngine.ts
 
 // POST-only advice endpoint (conversational local coach)
+import { getEntitlements, incrementSparkCount, getDailyRemaining, setPremium } from "./entitlements";
+
 app.post("/api/advice", async (req, res) => {
 	const body = (req.body || {}) as AdviceRequest & { sessionId?: string; mode?: string };
 
@@ -608,13 +610,27 @@ app.post("/api/advice", async (req, res) => {
 		console.warn("session write error", err);
 	}
 
-	try {
-		pushTurn(sessionId, { role: "user", text: body.userMessage, ts: Date.now() });
-	} catch (err) {
-		console.warn("memoryStore push user error", err);
-	}
+		try {
+			pushTurn(sessionId, { role: "user", text: body.userMessage, ts: Date.now() });
+		} catch (err) {
+			console.warn("memoryStore push user error", err);
+		}
 
-	const data = await coachBrainV2({ sessionId, userMessage: body.userMessage, mode: (body as any).mode });
+		// Enforce daily limits based on entitlements (sessionId used as uid in prototype)
+		try {
+			const ent = getEntitlements(sessionId);
+			const remaining = getDailyRemaining(sessionId).dailyRemaining;
+			if (ent && !ent.isPremium && remaining <= 0) {
+				return res.status(429).json({ ok: false, code: "DAILY_LIMIT", message: "Free users are limited to 3 Spark conversations per day. Upgrade to Premium for unlimited access." });
+			}
+		} catch (err) {
+			console.warn('entitlements check failed', err);
+		}
+
+	// detect if user is premium to request advanced responses
+	const ent = getEntitlements(sessionId);
+	const advanced = !!(ent && ent.isPremium);
+	const data = await coachBrainV2({ sessionId, userMessage: body.userMessage, mode: (body as any).mode, advanced });
 
 	// store assistant reply into session and memoryStore
 	try {
@@ -628,13 +644,21 @@ app.post("/api/advice", async (req, res) => {
 		console.warn("session write error", err);
 	}
 
-	try {
-		if (typeof data?.message === "string") {
-			pushTurn(sessionId, { role: "coach", text: data.message, ts: Date.now() });
+		try {
+			if (typeof data?.message === "string") {
+				pushTurn(sessionId, { role: "coach", text: data.message, ts: Date.now() });
+				// increment daily usage for non-premium users
+				try {
+					if (!(ent && ent.isPremium)) {
+						incrementSparkCount(sessionId, 1);
+					}
+				} catch (e) {
+					console.warn('increment spark count failed', e);
+				}
+			}
+		} catch (err) {
+			console.warn("memoryStore push coach error", err);
 		}
-	} catch (err) {
-		console.warn("memoryStore push coach error", err);
-	}
 
 	return res.json(data);
 });
@@ -649,6 +673,48 @@ app.get("/api/advice", (_req, res) => {
 		ok: true,
 		note: "This endpoint is POST-only. Send a POST request to /api/advice with JSON body.",
 	});
+});
+
+// Return entitlements for the current user (dev: accept sessionId via query or header)
+app.get('/api/me/entitlements', (req, res) => {
+	const sessionId = (req.query.sessionId as string) || req.headers['x-session-id'] as string || (req as any).sessionId;
+	if (!sessionId) return res.status(400).json({ ok: false, error: 'sessionId required' });
+	try {
+		const ent = getEntitlements(sessionId);
+		const daily = getDailyRemaining(sessionId);
+		return res.json({ ok: true, plan: ent?.plan ?? 'free', isPremium: !!ent?.isPremium, dailyLimit: daily.dailyLimit, dailyUsed: daily.dailyUsed, dailyRemaining: daily.dailyRemaining, advanced: !!ent?.isPremium });
+	} catch (err) {
+		console.warn('entitlements fetch error', err);
+		return res.status(500).json({ ok: false, error: 'Failed to fetch entitlements' });
+	}
+});
+
+// Dev-only admin route to set premium flag for a uid
+app.post('/api/admin/set-premium', (req, res) => {
+	const { uid, isPremium } = req.body || {};
+	if (!uid) return res.status(400).json({ ok: false, error: 'uid required' });
+	try {
+		setPremium(uid, !!isPremium);
+		return res.json({ ok: true, uid, isPremium: !!isPremium });
+	} catch (err) {
+		console.warn('set-premium failed', err);
+		return res.status(500).json({ ok: false, error: 'Failed to set premium' });
+	}
+});
+
+// Dev stub: create a checkout session and return a checkout URL.
+app.post('/api/checkout', (req, res) => {
+	const sessionId = (req.body && req.body.sessionId) || req.headers['x-session-id'] || (req as any).sessionId;
+	if (!sessionId) return res.status(400).json({ ok: false, error: 'sessionId required' });
+	try {
+		const base = process.env.CHECKOUT_BASE || 'https://checkout.example.com';
+		const returnUrl = process.env.CHECKOUT_RETURN || 'http://localhost:5173';
+		const url = `${base}/?sessionId=${encodeURIComponent(String(sessionId))}&returnUrl=${encodeURIComponent(returnUrl)}`;
+		return res.json({ ok: true, url });
+	} catch (err) {
+		console.warn('checkout create failed', err);
+		return res.status(500).json({ ok: false, error: 'Failed to create checkout' });
+	}
 });
 
 /* ===============================

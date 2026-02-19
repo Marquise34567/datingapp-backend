@@ -13,6 +13,7 @@ interface ComposerProps {
   onQuickAnalyze: (text: string) => void;
   loading?: boolean;
   placeholder?: string;
+  disabledSend?: boolean;
 }
 
 const Composer: React.FC<ComposerProps> = ({
@@ -24,6 +25,7 @@ const Composer: React.FC<ComposerProps> = ({
   onQuickAnalyze,
   loading = false,
   placeholder,
+  disabledSend = false,
 }) => {
   const taRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -92,6 +94,7 @@ const Composer: React.FC<ComposerProps> = ({
             size="md"
             onClick={() => onSend(input.trim())}
             loading={loading}
+            disabled={disabledSend}
             aria-label="Send message"
           >
             Send

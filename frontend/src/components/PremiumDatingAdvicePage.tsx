@@ -3,6 +3,8 @@
 import React, { useMemo, useRef, useState, useEffect } from "react";
 import { fetchAdvice } from "../lib/advice";
 import Button from "./ui/Button";
+import { fetchEntitlements, Entitlements } from "../lib/entitlements";
+import { createCheckoutSession } from "../lib/checkout";
 import Composer from "./ui/Composer";
 
 type Msg = { id: string; role: "user" | "assistant"; text: string };
@@ -34,6 +36,9 @@ export default function PremiumDatingAdvicePage() {
   const [showInsights, setShowInsights] = useState(false);
   const [mode, setMode] = useState<"dating_advice" | "rizz" | "strategy">("dating_advice");
   const [sessionId] = useState(() => (crypto as any).randomUUID());
+  const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
+  const [dailyLimitReached, setDailyLimitReached] = useState(false);
+  const [upgradeShownThisConversation, setUpgradeShownThisConversation] = useState(false);
 
   const canSend = useMemo(() => input.trim().length > 0, [input]);
   const placeholders = [
@@ -49,6 +54,21 @@ export default function PremiumDatingAdvicePage() {
     return () => clearInterval(id);
   }, [input]);
   const placeholderText = input.trim().length > 0 ? '' : placeholders[placeholderIndex];
+
+  // fetch entitlements on load
+  useEffect(() => {
+    (async () => {
+      try {
+        const e = await fetchEntitlements(sessionId);
+        setEntitlements(e);
+        if (e && typeof e.dailyRemaining === 'number' && e.dailyRemaining <= 0 && !e.isPremium) {
+          setDailyLimitReached(true);
+        }
+      } catch (err) {
+        console.warn('fetchEntitlements error', err);
+      }
+    })();
+  }, [sessionId]);
   function scrollToBottom() {
     requestAnimationFrame(() => {
       listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -127,6 +147,30 @@ export default function PremiumDatingAdvicePage() {
       ]);
     } catch (e: any) {
       console.error('fetchAdvice error', e);
+      if (e?.status === 429 && e?.body?.code === 'DAILY_LIMIT') {
+        setDailyLimitReached(true);
+        setShowModal(true);
+
+          // Show upgrade modal mid-conversation for free users once
+          try {
+            if (entitlements && !entitlements.isPremium && !upgradeShownThisConversation) {
+              // If conversation already has a few turns, show mid-convo; otherwise show after this reply
+              const priorTurns = messages.filter((m) => m.role === 'user' || m.role === 'assistant').length;
+              if (priorTurns >= 3) {
+                setShowModal(true);
+                setUpgradeShownThisConversation(true);
+              }
+            }
+          } catch (e) {
+            console.warn('upgrade modal check failed', e);
+          }
+        try {
+          const e2 = await fetchEntitlements(sessionId);
+          setEntitlements(e2);
+        } catch (er) {
+          console.warn('refresh entitlements failed', er);
+        }
+      }
     } finally {
       setLoading(false);
     }
@@ -167,6 +211,29 @@ export default function PremiumDatingAdvicePage() {
       ]);
     } catch (e: any) {
       console.error('fetchAdvice error', e);
+      if (e?.status === 429 && e?.body?.code === 'DAILY_LIMIT') {
+        setDailyLimitReached(true);
+        setShowModal(true);
+
+          // Show upgrade modal mid-conversation for free users once
+          try {
+            if (entitlements && !entitlements.isPremium && !upgradeShownThisConversation) {
+              const priorTurns = messages.filter((m) => m.role === 'user' || m.role === 'assistant').length;
+              if (priorTurns >= 3) {
+                setShowModal(true);
+                setUpgradeShownThisConversation(true);
+              }
+            }
+          } catch (e) {
+            console.warn('upgrade modal check failed', e);
+          }
+        try {
+          const e2 = await fetchEntitlements(sessionId);
+          setEntitlements(e2);
+        } catch (er) {
+          console.warn('refresh entitlements failed', er);
+        }
+      }
     } finally {
       setLoading(false);
     }
@@ -196,9 +263,6 @@ export default function PremiumDatingAdvicePage() {
               <span className="text-sm text-zinc-500">7.4/10</span>
               <Button size="sm" variant="primary" className="ml-2" onClick={() => setShowModal(true)}>
                 Upgrade
-              </Button>
-              <Button size="sm" variant="ghost" className="ml-2">
-                Sign in
               </Button>
             </div>
         </div>
@@ -230,8 +294,12 @@ export default function PremiumDatingAdvicePage() {
                   </svg>
                 </div>
                 <div>
-                  <div className="text-sm font-semibold">Spark</div>
-                  <div className="text-xs text-zinc-500">iMessage-style advice</div>
+                  <div className="text-sm font-semibold flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4 text-amber-400" fill="currentColor" aria-hidden="true">
+                      <path d="M12 .587l3.668 7.431 8.2 1.192-5.934 5.787 1.402 8.176L12 18.896l-7.336 3.876 1.402-8.176L.132 9.21l8.2-1.192z" />
+                    </svg>
+                    <span>Spark</span>
+                  </div>
                 </div>
               </div>
               <div className="text-xs text-zinc-500">Online</div>
@@ -267,6 +335,7 @@ export default function PremiumDatingAdvicePage() {
                     onSend={(t) => pushUser(t)}
                     onQuickAnalyze={(t) => pushStrategy(t)}
                     loading={loading}
+                    disabledSend={dailyLimitReached}
                     placeholder={placeholderText}
                   />
                 </div>
@@ -329,7 +398,7 @@ export default function PremiumDatingAdvicePage() {
                 <div className="text-sm font-semibold">Conversation in progress</div>
                 <p className="mt-3 text-sm text-zinc-600">Finish the conversation to see insights and suggested replies.</p>
                 <div className="mt-4">
-                  <Button type="button" onClick={() => setShowInsights(true)} className="w-full" variant="primary" size="md">
+                  <Button type="button" onClick={() => { setShowInsights(true); if (entitlements && !entitlements.isPremium) { setShowModal(true); setUpgradeShownThisConversation(true); } }} className="w-full" variant="primary" size="md">
                     Finish conversation
                   </Button>
                 </div>
@@ -342,41 +411,62 @@ export default function PremiumDatingAdvicePage() {
         {showModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center">
             <div className="absolute inset-0 bg-black/40" onClick={() => setShowModal(false)} />
-            <div className="relative z-10 w-full max-w-md rounded-3xl bg-white p-6 shadow-xl">
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="text-sm font-semibold">Premium</div>
-                  <div className="mt-1 text-xs text-zinc-500">Best for daily texting</div>
+                <div className="relative z-10 w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl">
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+                    <div className="lg:col-span-2">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-2xl font-bold">Spark Premium</div>
+                          <div className="mt-1 text-sm text-zinc-500">Unlimited conversations, advanced coaching, and priority support.</div>
+                        </div>
+                        <button className="text-zinc-500" onClick={() => setShowModal(false)}>✕</button>
+                      </div>
+
+                      <div className="mt-6 flex items-center gap-6">
+                        <div className="text-4xl font-extrabold">$19<span className="text-base font-medium text-zinc-400">/mo</span></div>
+                        <div className="rounded-full px-3 py-1 text-xs font-semibold text-white" style={{ background: 'linear-gradient(90deg,#ff7a59,#ff4d8d)' }}>Popular</div>
+                      </div>
+
+                      <ul className="mt-6 space-y-3 text-sm text-zinc-700">
+                        <li>• Unlimited Spark conversations every day</li>
+                        <li>• Advanced, richer coaching replies (more options + deeper steps)</li>
+                        <li>• Priority model capacity and faster responses</li>
+                        <li>• Tone controls, date plans, and follow-up sequences</li>
+                      </ul>
+
+                      <div className="mt-6 text-sm text-zinc-500">Secure checkout by Stripe.</div>
+                    </div>
+
+                    <div className="lg:col-span-1">
+                      <div className="rounded-xl border border-zinc-100 p-4 shadow-sm bg-gradient-to-br from-white to-zinc-50">
+                        <div className="text-xs text-zinc-500">Your plan</div>
+                        <div className="mt-2 text-lg font-semibold">Spark Premium</div>
+                        <div className="mt-3">
+                          <Button
+                            type="button"
+                            className="w-full"
+                            variant="primary"
+                            size="md"
+                            onClick={async () => {
+                              try {
+                                const url = await createCheckoutSession(sessionId);
+                                // open checkout in new tab
+                                window.open(url, '_blank');
+                                setShowModal(false);
+                              } catch (err) {
+                                console.error('checkout error', err);
+                                alert('Failed to start checkout. Please try again.');
+                              }
+                            }}
+                          >
+                            Upgrade & Checkout
+                          </Button>
+                        </div>
+                        <div className="mt-3 text-xs text-zinc-400">No commitment — cancel anytime.</div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <button className="text-zinc-500" onClick={() => setShowModal(false)}>✕</button>
-              </div>
-
-              <div className="mt-4 text-3xl font-semibold">
-                $19<span className="text-base font-medium text-zinc-400">/mo</span>
-              </div>
-
-              <ul className="mt-5 space-y-2 text-sm text-zinc-600">
-                <li>• Unlimited replies + rewrites</li>
-                <li>• Tone + intent detection</li>
-                <li>• “Make it smoother” slider</li>
-                <li>• Date plan + follow-up texts</li>
-              </ul>
-
-              <Button
-                type="button"
-                className="mt-6 w-full"
-                variant="primary"
-                size="md"
-                onClick={() => {
-                  // placeholder for upgrade action
-                  setShowModal(false);
-                }}
-              >
-                Upgrade to Premium
-              </Button>
-
-              <div className="mt-3 text-xs text-zinc-400">Backend later: this will start checkout.</div>
-            </div>
           </div>
         )}
 

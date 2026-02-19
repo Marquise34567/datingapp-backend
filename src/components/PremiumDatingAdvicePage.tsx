@@ -139,8 +139,12 @@ export default function PremiumDatingAdvicePage() {
               <div className="flex items-center gap-3">
                 <div className="h-10 w-10 rounded-2xl bg-linear-to-br from-zinc-950 to-zinc-700" />
                 <div>
-                  <div className="text-sm font-semibold">Coach</div>
-                  <div className="text-xs text-zinc-500">iMessage-style advice</div>
+                  <div className="text-sm font-semibold flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4 text-amber-400" fill="currentColor" aria-hidden="true">
+                      <path d="M12 .587l3.668 7.431 8.2 1.192-5.934 5.787 1.402 8.176L12 18.896l-7.336 3.876 1.402-8.176L.132 9.21l8.2-1.192z" />
+                    </svg>
+                    <span>Coach</span>
+                  </div>
                 </div>
               </div>
               <div className="text-xs text-zinc-500">Online</div>
