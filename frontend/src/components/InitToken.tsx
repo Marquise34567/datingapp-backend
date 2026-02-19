@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect } from "react";
+import { apiFetch } from "../lib/api";
 
 export default function InitToken() {
   useEffect(() => {
     let mounted = true;
     async function init() {
       try {
-        await fetch('/api/token', { method: 'POST', credentials: 'include' });
+        await apiFetch('/token', { method: 'POST' });
       } catch (e) {
         // ignore
       }

@@ -35,11 +35,7 @@ export default function DatingAdviceUI() {
 
   const canSend = useMemo(() => input.trim().length > 0, [input]);
 
-  function scrollToBottom() {
-    requestAnimationFrame(() => {
-      listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
-    });
-  }
+  // Auto-scroll removed: do not programmatically scroll when messages update.
 
   function send(text: string) {
     const trimmed = text.trim();
@@ -48,7 +44,6 @@ export default function DatingAdviceUI() {
     setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", text: trimmed }]);
     setInput("");
     setIsTyping(true);
-    scrollToBottom();
 
     const delay = 700 + Math.floor(Math.random() * 800);
     setTimeout(() => {
@@ -62,7 +57,7 @@ export default function DatingAdviceUI() {
         },
       ]);
       setIsTyping(false);
-      scrollToBottom();
+      // no auto-scroll
     }, delay);
   }
 
