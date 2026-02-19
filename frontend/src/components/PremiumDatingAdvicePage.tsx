@@ -8,7 +8,7 @@ import { createCheckoutSession } from "../lib/checkout";
 import Composer from "./ui/Composer";
 import ChatThread from "./ui/ChatThread";
 
-type Msg = { id: string; role: "user" | "assistant"; text: string };
+type Msg = { id: string; role: "user" | "assistant"; text: string; coach?: any };
 
 // Quick actions removed per request
 
@@ -70,6 +70,27 @@ export default function PremiumDatingAdvicePage() {
       }
     })();
   }, [sessionId]);
+
+  // Listen for draft chip clicks from ChatThread: copy -> set input
+  useEffect(() => {
+    function onDraft(e: any) {
+      const text = e?.detail?.text;
+      if (typeof text === 'string') {
+        setInput(text);
+        // focus composer if present
+        const el = document.querySelector('textarea') as HTMLTextAreaElement | null;
+        if (el) {
+          el.focus();
+        }
+      }
+    }
+    window.addEventListener('spark:draft', onDraft as EventListener);
+    window.addEventListener('spark:question', onDraft as EventListener);
+    return () => {
+      window.removeEventListener('spark:draft', onDraft as EventListener);
+      window.removeEventListener('spark:question', onDraft as EventListener);
+    };
+  }, []);
   function scrollToBottom() {
     requestAnimationFrame(() => {
       listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -156,6 +177,7 @@ export default function PremiumDatingAdvicePage() {
           id: crypto.randomUUID(),
           role: "assistant",
           text: assistantText || "I generated advice, but it returned empty.",
+          coach: result,
         },
       ]);
     } catch (e: any) {
@@ -342,9 +364,9 @@ export default function PremiumDatingAdvicePage() {
 
             {/* Messages + sticky composer: make chat follow and composer stay visible */}
             <div className="flex flex-col h-[56vh]">
-              <ChatThread messages={messages} />
+              <ChatThread messages={messages} containerRef={listRef} />
 
-              <div className="sticky bottom-0 border-t border-zinc-100 bg-white px-4 py-4">
+              <div className="shrink-0 bg-white/90 backdrop-blur border-t border-zinc-100 p-4">
                 <div className="flex items-end gap-2">
                   <div className="flex-1">
                     <Composer
