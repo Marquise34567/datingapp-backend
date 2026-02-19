@@ -2,6 +2,8 @@
 
 import React, { useMemo, useRef, useState, useEffect } from "react";
 import { fetchAdvice } from "../lib/advice";
+import Button from "./ui/Button";
+import Composer from "./ui/Composer";
 
 type Msg = { id: string; role: "user" | "assistant"; text: string };
 
@@ -16,6 +18,7 @@ export default function PremiumDatingAdvicePage() {
   const [messages, setMessages] = useState<Msg[]>([
     {
       id: "a1",
+
       role: "assistant",
       text: "Tell me what you want help with — paste the convo or describe the vibe.",
     },
@@ -31,6 +34,7 @@ export default function PremiumDatingAdvicePage() {
   const [showInsights, setShowInsights] = useState(false);
   const [mode, setMode] = useState<"dating_advice" | "rizz" | "strategy">("dating_advice");
   const [sessionId] = useState(() => (crypto as any).randomUUID());
+  const [error, setError] = useState<any>(null);
 
   const canSend = useMemo(() => input.trim().length > 0, [input]);
   const placeholders = [
@@ -65,10 +69,34 @@ export default function PremiumDatingAdvicePage() {
     return `${headline}${why}${pick}`.trim();
   }
 
+  function getErrorMessage(err: any) {
+    // our fetchAdvice throws structured errors { status, body, raw }
+    if (err?.status) {
+      const body = err.body ?? (err.raw ? err.raw : null);
+      const message = body?.message ?? body?.error ?? body ?? null;
+      return JSON.stringify({ status: err.status, message, body }, null, 2);
+    }
+    // axios style
+    const axiosMsg =
+      err?.response?.data?.message ||
+      err?.response?.data?.error ||
+      err?.response?.data;
+
+    if (typeof axiosMsg === "string") return axiosMsg;
+    if (axiosMsg) return JSON.stringify(axiosMsg, null, 2);
+
+    // fetch style
+    if (err instanceof Error) return err.message;
+
+    if (typeof err === "string") return err;
+
+    return JSON.stringify(err, null, 2);
+  }
+
   async function pushUser(text: string) {
     const trimmed = text.trim();
     if (!trimmed || loading) return;
-
+    setError(null);
     setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", text: trimmed }]);
     setInput("");
     setLoading(true);
@@ -100,10 +128,7 @@ export default function PremiumDatingAdvicePage() {
         },
       ]);
     } catch (e: any) {
-      setMessages((prev) => [
-        ...prev,
-        { id: crypto.randomUUID(), role: "assistant", text: `Error: ${e.message}` },
-      ]);
+      setError(e);
     } finally {
       setLoading(false);
     }
@@ -112,7 +137,7 @@ export default function PremiumDatingAdvicePage() {
   async function pushStrategy(text: string) {
     const trimmed = (text || "").trim();
     if (!trimmed || loading) return;
-
+    setError(null);
     setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", text: trimmed }]);
     setInput("");
     setLoading(true);
@@ -144,10 +169,7 @@ export default function PremiumDatingAdvicePage() {
         },
       ]);
     } catch (e: any) {
-      setMessages((prev) => [
-        ...prev,
-        { id: crypto.randomUUID(), role: "assistant", text: `Error: ${e.message}` },
-      ]);
+      setError(e);
     } finally {
       setLoading(false);
     }
@@ -156,7 +178,7 @@ export default function PremiumDatingAdvicePage() {
   return (
     <div className="min-h-screen app-bg">
       {/* Top Nav */}
-      <header className="sticky top-0 z-20 border-b border-white/10 bg-black/30 backdrop-blur-xl">
+      <header className="sticky top-0 z-20 border-b border-white/10 bg-linear-to-br from-white/5 to-white/10 backdrop-blur-md">
           <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
           <div className="flex items-center gap-3">
             <div className="h-9 w-9 rounded-2xl bg-linear-to-br from-zinc-950 to-zinc-700 text-white grid place-items-center">
@@ -171,17 +193,17 @@ export default function PremiumDatingAdvicePage() {
           </div>
 
             <div className="flex items-center gap-2">
-            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-              Good
-            </span>
-            <span className="text-sm text-zinc-500">7.4/10</span>
-            <button className="ml-2 btn btn-primary" onClick={() => setShowModal(true)}>
-              Upgrade
-            </button>
-            <button className="ml-2 btn btn-ghost">
-              Sign in
-            </button>
-          </div>
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                Good
+              </span>
+              <span className="text-sm text-zinc-500">7.4/10</span>
+              <Button size="sm" variant="primary" className="ml-2" onClick={() => setShowModal(true)}>
+                Upgrade
+              </Button>
+              <Button size="sm" variant="ghost" className="ml-2">
+                Sign in
+              </Button>
+            </div>
         </div>
       </header>
 
@@ -193,7 +215,7 @@ export default function PremiumDatingAdvicePage() {
         {/* Main layout */}
         <section className="mt-10 grid gap-6 lg:grid-cols-[1fr_380px]">
           {/* Chat panel */}
-          <div className="rounded-3xl border border-zinc-200 bg-white shadow-deep overflow-hidden">
+          <div className="rounded-3xl border border-zinc-200 bg-white premium-shadow elevated overflow-hidden">
             {/* Chat header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100">
               <div className="flex items-center gap-3">
@@ -239,86 +261,31 @@ export default function PremiumDatingAdvicePage() {
             {/* Composer */}
             <div className="border-t border-zinc-100 bg-white px-4 py-4">
               <div className="flex items-end gap-2">
-                <div className="flex-1 composer-input">
-                  <div className="mb-3">
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setMode("dating_advice")}
-                        className={`px-3 py-1.5 rounded-full text-sm border transition ${mode === "dating_advice" ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50"}`}
-                      >
-                        Dating advice
-                      </button>
-
-                      <button
-                        onClick={() => setMode("rizz")}
-                        className={`px-3 py-1.5 rounded-full text-sm border transition ${mode === "rizz" ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50"}`}
-                      >
-                        Rizz
-                      </button>
-                      <button
-                        onClick={() => setMode("strategy")}
-                        className={`px-3 py-1.5 rounded-full text-sm border transition ${mode === "strategy" ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50"}`}
-                      >
-                        Strategy
-                      </button>
-                    </div>
-                  </div>
-
-                  <textarea
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    placeholder="Type your situation… (paste the convo, what they said, and what you want)"
-                    rows={1}
-                    className="max-h-28 w-full resize-none placeholder:text-zinc-400"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        if (canSend) pushUser(input);
-                      }
-                    }}
+                <div className="flex-1">
+                  <Composer
+                    mode={mode}
+                    setMode={(m) => setMode(m as 'dating_advice' | 'rizz' | 'strategy')}
+                    input={input}
+                    setInput={(s) => setInput(s)}
+                    onSend={(t) => pushUser(t)}
+                    onQuickAnalyze={(t) => pushStrategy(t)}
+                    loading={loading}
+                    placeholder={placeholderText}
                   />
-                  <div className="composer-meta">
-                    <div>Enter to send • Shift+Enter new line</div>
-                    <div>Privacy-first (UI placeholder)</div>
-                  </div>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => pushUser(input)}
-                  disabled={!input.trim() || loading}
-                  aria-label="Send message"
-                  className={cx(
-                    "send-button",
-                    !input.trim() || loading ? "bg-zinc-200 text-zinc-400 cursor-not-allowed" : "accent-gradient"
-                  )}
-                >
-                  {loading ? (
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10v6a2 2 0 0 1-2 2h-6"/></svg>
-                  ) : (
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21s-7-4.35-9.2-7.05C-0.1 8.3 5.2 3 8.7 5.6 10.3 6.9 12 9 12 9s1.7-2.1 3.3-3.4C18.8 3 24.1 8.3 21.2 13.95 19 17.65 12 21 12 21z"/></svg>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    // Quick Analyze: run strategist on current input or last user message
-                    const text = input.trim() || messages.slice().reverse().find(m => m.role === 'user')?.text || '';
-                    if (text) pushStrategy(text);
-                  }}
-                  disabled={loading}
-                  className="ml-2 rounded-full px-3 py-1.5 text-sm border bg-white text-gray-700 hover:bg-gray-50"
-                >
-                  Quick Analyze
-                </button>
               </div>
             </div>
+            {error && (
+              <pre className="mt-3 rounded-xl border bg-white p-3 text-xs text-red-600 whitespace-pre-wrap">
+                {getErrorMessage(error)}
+              </pre>
+            )}
           </div>
 
           {/* Side panel: show only after conversation is finished */}
           {showInsights ? (
             <aside className="space-y-6">
-              <div className="rounded-3xl border border-zinc-200 bg-white p-6 shadow-deep">
+              <div className="rounded-3xl border border-zinc-200 bg-white p-6 premium-shadow elevated">
                 <div className="text-sm font-semibold">Conversation Insights</div>
                 <div className="mt-4 flex items-center justify-between">
                   <div className="text-4xl font-semibold">7.4</div>
@@ -346,7 +313,7 @@ export default function PremiumDatingAdvicePage() {
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-zinc-200 bg-white p-6 shadow-deep">
+              <div className="rounded-3xl border border-zinc-200 bg-white p-6 premium-shadow elevated">
                 <div className="text-sm font-semibold">Suggested Replies</div>
                 <div className="mt-4 grid gap-2">
                   {['😄', '😉', '❤️', '🔥'].map((emoji) => (
@@ -354,9 +321,10 @@ export default function PremiumDatingAdvicePage() {
                       key={emoji}
                       type="button"
                       onClick={() => pushUser(`Use this vibe: ${emoji}`)}
-                      className="rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-left text-sm shadow-sm hover:bg-zinc-50"
+                      className="suggested-reply w-full text-left"
                     >
-                      {emoji} Make it match this vibe
+                      <span style={{fontSize:18}}>{emoji}</span>
+                      <span style={{marginLeft:12}}>Make it match this vibe</span>
                     </button>
                   ))}
                 </div>
@@ -364,17 +332,13 @@ export default function PremiumDatingAdvicePage() {
             </aside>
           ) : (
             <aside className="space-y-6">
-              <div className="rounded-3xl border border-zinc-200 bg-white p-6 shadow-deep">
+              <div className="rounded-3xl border border-zinc-200 bg-white p-6 premium-shadow elevated">
                 <div className="text-sm font-semibold">Conversation in progress</div>
                 <p className="mt-3 text-sm text-zinc-600">Finish the conversation to see insights and suggested replies.</p>
                 <div className="mt-4">
-                  <button
-                    type="button"
-                    onClick={() => setShowInsights(true)}
-                    className="w-full rounded-2xl bg-zinc-950 py-3 text-sm font-semibold text-white shadow-sm hover:bg-zinc-800"
-                  >
+                  <Button type="button" onClick={() => setShowInsights(true)} className="w-full" variant="primary" size="md">
                     Finish conversation
-                  </button>
+                  </Button>
                 </div>
               </div>
             </aside>
@@ -405,16 +369,18 @@ export default function PremiumDatingAdvicePage() {
                 <li>• Date plan + follow-up texts</li>
               </ul>
 
-              <button
+              <Button
                 type="button"
-                className="mt-6 w-full rounded-2xl bg-zinc-950 py-3 text-sm font-semibold text-white shadow-sm hover:bg-zinc-800"
+                className="mt-6 w-full"
+                variant="primary"
+                size="md"
                 onClick={() => {
                   // placeholder for upgrade action
                   setShowModal(false);
                 }}
               >
                 Upgrade to Premium
-              </button>
+              </Button>
 
               <div className="mt-3 text-xs text-zinc-400">Backend later: this will start checkout.</div>
             </div>
