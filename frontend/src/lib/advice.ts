@@ -16,8 +16,9 @@ export async function fetchAdvice(payload: any): Promise<AdviceResponse> {
     const rawMode = payload?.mode ?? payload?.tab;
     const normalizedMode = rawMode === 'dating_advice' ? 'dating' : rawMode;
 
+    // send `text` consistently so backend validation sees it
     const body = {
-      message: payload?.message ?? payload?.text ?? payload?.userMessage ?? payload?.input ?? '',
+      text: payload?.message ?? payload?.text ?? payload?.userMessage ?? payload?.input ?? '',
       mode: normalizedMode,
       conversation: payload?.conversation,
       sessionId: payload?.sessionId,

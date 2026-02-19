@@ -6,6 +6,7 @@ import Button from "./ui/Button";
 import { fetchEntitlements, Entitlements } from "../lib/entitlements";
 import { createCheckoutSession } from "../lib/checkout";
 import Composer from "./ui/Composer";
+import ChatThread from "./ui/ChatThread";
 
 type Msg = { id: string; role: "user" | "assistant"; text: string };
 
@@ -339,40 +340,26 @@ export default function PremiumDatingAdvicePage() {
               <div className="text-xs text-zinc-500">Online</div>
             </div>
 
-            {/* Messages */}
-            <div
-              ref={listRef}
-              className="h-[56vh] overflow-y-auto px-4 py-4"
-            >
-              <div className="space-y-3">
-                {messages.map((m) => (
-                  <div key={m.id} className={cx("flex", m.role === "user" ? "justify-end" : "justify-start")}>
-                    <div className={cx("max-w-[85%] rounded-3xl px-4 py-3 text-[15px] leading-relaxed shadow-sm whitespace-pre-line", m.role === "user" ? "user-bubble" : "assistant-bubble")}>
-                      {m.text}
-                    </div>
+            {/* Messages + sticky composer: make chat follow and composer stay visible */}
+            <div className="flex flex-col h-[56vh]">
+              <ChatThread messages={messages} />
+
+              <div className="sticky bottom-0 border-t border-zinc-100 bg-white px-4 py-4">
+                <div className="flex items-end gap-2">
+                  <div className="flex-1">
+                    <Composer
+                      mode={mode}
+                      setMode={(m) => setMode(m as 'dating_advice' | 'rizz' | 'strategy')}
+                      input={input}
+                      setInput={(s) => setInput(s)}
+                      onSend={(t) => pushUser(t)}
+                      onQuickAnalyze={(t) => pushStrategy(t)}
+                      loading={loading}
+                      disabledSend={dailyLimitReached}
+                      placeholder={placeholderText}
+                      isPremium={!!entitlements?.isPremium}
+                    />
                   </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Quick actions removed */}
-
-            {/* Composer */}
-            <div className="border-t border-zinc-100 bg-white px-4 py-4">
-              <div className="flex items-end gap-2">
-                <div className="flex-1">
-                  <Composer
-                    mode={mode}
-                    setMode={(m) => setMode(m as 'dating_advice' | 'rizz' | 'strategy')}
-                    input={input}
-                    setInput={(s) => setInput(s)}
-                    onSend={(t) => pushUser(t)}
-                    onQuickAnalyze={(t) => pushStrategy(t)}
-                    loading={loading}
-                    disabledSend={dailyLimitReached}
-                    placeholder={placeholderText}
-                    isPremium={!!entitlements?.isPremium}
-                  />
                 </div>
               </div>
             </div>
