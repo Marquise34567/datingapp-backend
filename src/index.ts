@@ -44,7 +44,7 @@ app.post('/api/checkout', async (req, res) => {
   if (!sessionId) return res.status(400).json({ ok: false, error: 'sessionId required' });
 
   const stripeSecret = process.env.STRIPE_SECRET;
-  const priceId = process.env.STRIPE_PRICE_ID;
+  const priceId = process.env.STRIPE_PRICE_ID || 'price_1T2NLoAgdqex7SFJZCMoi7pv';
   if (!stripeSecret || !priceId) {
     const base = process.env.CHECKOUT_BASE || 'https://checkout.example.com';
     const returnUrl = process.env.CHECKOUT_RETURN || `http://localhost:${process.env.PORT || 5173}`;
