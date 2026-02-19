@@ -128,6 +128,7 @@ Follow these rules strictly; output plain natural language only.`;
 
 RULES:
 - Start by reflecting what happened + the user's goal in 1–2 sentences.
+- Always mirror at least one specific detail from the user's last message in your first 2 sentences. For example: "You got broken up with — that's rough."
 - Then give a concrete next move (not generic advice).
 - If the user asks "what do I text back", you MUST:
   1) propose 3 ready-to-send texts customized to their situation
