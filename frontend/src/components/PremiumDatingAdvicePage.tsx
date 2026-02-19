@@ -8,7 +8,7 @@ import { createCheckoutSession } from "../lib/checkout";
 import Composer from "./ui/Composer";
 import ChatThread from "./ui/ChatThread";
 
-type Msg = { id: string; role: "user" | "assistant"; text: string; coach?: any };
+type Msg = { id: string; role: "user" | "assistant"; text: string };
 
 // Quick actions removed per request
 
@@ -70,27 +70,6 @@ export default function PremiumDatingAdvicePage() {
       }
     })();
   }, [sessionId]);
-
-  // Listen for draft chip clicks from ChatThread: copy -> set input
-  useEffect(() => {
-    function onDraft(e: any) {
-      const text = e?.detail?.text;
-      if (typeof text === 'string') {
-        setInput(text);
-        // focus composer if present
-        const el = document.querySelector('textarea') as HTMLTextAreaElement | null;
-        if (el) {
-          el.focus();
-        }
-      }
-    }
-    window.addEventListener('spark:draft', onDraft as EventListener);
-    window.addEventListener('spark:question', onDraft as EventListener);
-    return () => {
-      window.removeEventListener('spark:draft', onDraft as EventListener);
-      window.removeEventListener('spark:question', onDraft as EventListener);
-    };
-  }, []);
   function scrollToBottom() {
     requestAnimationFrame(() => {
       listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -177,7 +156,6 @@ export default function PremiumDatingAdvicePage() {
           id: crypto.randomUUID(),
           role: "assistant",
           text: assistantText || "I generated advice, but it returned empty.",
-          coach: result,
         },
       ]);
     } catch (e: any) {
@@ -291,7 +269,7 @@ export default function PremiumDatingAdvicePage() {
   }
 
   return (
-    <div className="h-[100dvh] overflow-hidden app-bg">
+    <div className="min-h-screen app-bg">
       {/* Top Nav */}
       <header className="sticky top-0 z-20 border-b border-white/10 bg-linear-to-br from-white/5 to-white/10 backdrop-blur-md">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
@@ -326,14 +304,14 @@ export default function PremiumDatingAdvicePage() {
       </header>
 
       {/* Content */}
-        <main className="mx-auto h-full max-w-6xl px-6 py-6">
+        <main className="mx-auto max-w-6xl px-4 py-8 relative">
           <div className="hearts-decor" />
         {/* HeroCard removed */}
 
         {/* Main layout */}
-        <section className="mt-10 grid gap-6 lg:grid-cols-[1fr_380px] h-full min-h-0">
+        <section className="mt-10 grid gap-6 lg:grid-cols-[1fr_380px]">
           {/* Chat panel */}
-          <div className="rounded-3xl border border-zinc-200 bg-white premium-shadow elevated overflow-hidden flex h-full min-h-0 flex-col">
+          <div className="rounded-3xl border border-zinc-200 bg-white premium-shadow elevated overflow-hidden">
             {/* Chat header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100">
               <div className="flex items-center gap-3">
@@ -362,13 +340,11 @@ export default function PremiumDatingAdvicePage() {
               <div className="text-xs text-zinc-500">Online</div>
             </div>
 
-            {/* Messages + composer: messages scroll, composer stays pinned at bottom */}
-            <div className="flex h-full min-h-0 flex-col">
-              <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto px-6 pt-6 pb-28">
-                <ChatThread messages={messages} />
-              </div>
+            {/* Messages + sticky composer: make chat follow and composer stay visible */}
+            <div className="flex flex-col h-[56vh]">
+              <ChatThread messages={messages} />
 
-              <div className="shrink-0 z-20 border-t border-black/5 bg-white/80 backdrop-blur-sm px-0 py-3">
+              <div className="sticky bottom-0 border-t border-zinc-100 bg-white px-4 py-4">
                 <div className="flex items-end gap-2">
                   <div className="flex-1">
                     <Composer

@@ -21,7 +21,7 @@
 	--shadow-strong: 0 26px 90px rgba(11,18,32,0.20);
 }
 
-html, body, #root { height: 100%; }
+html, body { height: 100%; }
 body { margin: 0; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; font-family: Poppins, Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; background: radial-gradient(900px 400px at 10% 10%, rgba(255,125,170,0.06), transparent 8%), radial-gradient(700px 300px at 90% 90%, rgba(124,58,237,0.04), transparent 6%), var(--bg-1); color: var(--primary-text); }
 
 /* Make default form controls look premium */
