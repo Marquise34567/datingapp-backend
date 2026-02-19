@@ -207,15 +207,13 @@ app.post('/api/billing/create-checkout-session', async (req, res) => {
 // Compatibility route: some clients call /api/stripe/create-checkout-session
 app.post('/api/stripe/create-checkout-session', async (req, res) => {
   try {
-    // Reuse the same logic as /api/billing/create-checkout-session
     const body = req.body || {};
     const sessionId = body.sessionId || body.uid || req.headers['x-session-id'];
     if (!sessionId) return res.status(400).json({ ok: false, error: 'sessionId required' });
 
     const stripeSecret = process.env.STRIPE_SECRET_KEY;
     const rawPrice = process.env.STRIPE_PRICE_ID || '';
-    const priceId = rawPrice.trim().replace(/[^
-\w-]/g, '');
+    const priceId = rawPrice.trim().replace(/[^\w-]/g, '');
     const appUrl = (process.env.APP_URL || `http://localhost:${process.env.FRONTEND_PORT || 5173}`).replace(/\/$/, '');
 
     if (!stripeSecret || !priceId) {
