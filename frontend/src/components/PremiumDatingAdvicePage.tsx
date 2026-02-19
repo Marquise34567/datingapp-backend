@@ -291,7 +291,7 @@ export default function PremiumDatingAdvicePage() {
   }
 
   return (
-    <div className="min-h-screen app-bg">
+    <div className="h-[100dvh] overflow-hidden app-bg">
       {/* Top Nav */}
       <header className="sticky top-0 z-20 border-b border-white/10 bg-linear-to-br from-white/5 to-white/10 backdrop-blur-md">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
@@ -326,12 +326,12 @@ export default function PremiumDatingAdvicePage() {
       </header>
 
       {/* Content */}
-        <main className="mx-auto max-w-6xl px-4 py-8 relative min-h-[calc(100vh-80px)]">
+        <main className="mx-auto h-full max-w-6xl px-6 py-6">
           <div className="hearts-decor" />
         {/* HeroCard removed */}
 
         {/* Main layout */}
-        <section className="mt-10 grid gap-6 lg:grid-cols-[1fr_380px]">
+        <section className="mt-10 grid gap-6 lg:grid-cols-[1fr_380px] h-full min-h-0">
           {/* Chat panel */}
           <div className="rounded-3xl border border-zinc-200 bg-white premium-shadow elevated overflow-hidden flex h-full min-h-0 flex-col">
             {/* Chat header */}
@@ -365,7 +365,7 @@ export default function PremiumDatingAdvicePage() {
             {/* Messages + composer: messages scroll, composer stays pinned at bottom */}
             <div className="flex h-full min-h-0 flex-col">
               <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto px-6 pt-6 pb-28">
-                <ChatThread messages={messages} containerRef={listRef} />
+                <ChatThread messages={messages} />
               </div>
 
               <div className="shrink-0 z-20 border-t border-black/5 bg-white/80 backdrop-blur-sm px-0 py-3">

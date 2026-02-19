@@ -1,18 +1,11 @@
-import React, { useRef } from 'react';
+import React from 'react';
 
 type Msg = { id: string; role: 'user' | 'assistant'; text: string; coach?: any };
 
-export default function ChatThread({ messages, containerRef }: { messages: Msg[]; containerRef?: React.RefObject<HTMLDivElement> }) {
-  const internalRef = useRef<HTMLDivElement | null>(null);
-  const endRef = useRef<HTMLDivElement | null>(null);
-
-  const ref = containerRef ?? internalRef;
-
-
-  // Removed auto-scroll logic; parent manages scrolling now.
-
+export default function ChatThread({ messages }: { messages: Msg[] }) {
+  // ChatThread no longer owns scrolling — parent provides the scroll container.
   return (
-    <div ref={ref} className="flex-1 overflow-y-auto px-4 py-4">
+    <div className="px-4 py-4">
       <div className="space-y-3">
         {messages.map((m) => (
           <div key={m.id} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
@@ -20,10 +13,8 @@ export default function ChatThread({ messages, containerRef }: { messages: Msg[]
               {m.text}
             </div>
 
-            {/* If assistant message contains structured coach data, render chips and questions */}
             {m.role === 'assistant' && m.coach ? (
               <div className="mt-2 ml-3 flex flex-col gap-2">
-                {/* Draft texts as chips/buttons */}
                 {Array.isArray(m.coach.draft_texts) && m.coach.draft_texts.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
                     {m.coach.draft_texts.map((dt: string, i: number) => (
@@ -47,7 +38,6 @@ export default function ChatThread({ messages, containerRef }: { messages: Msg[]
                   </div>
                 ) : null}
 
-                {/* Questions as subtle follow-ups */}
                 {Array.isArray(m.coach.questions) && m.coach.questions.length > 0 ? (
                   <div className="mt-1 text-sm text-zinc-500">
                     <div className="text-xs text-zinc-400">Quick question</div>
@@ -70,7 +60,6 @@ export default function ChatThread({ messages, containerRef }: { messages: Msg[]
           </div>
         ))}
       </div>
-      <div ref={endRef} />
     </div>
   );
 }
