@@ -84,7 +84,7 @@ function extractMessage(data: unknown): string {
 
 async function llmAssist(opts: { mode: Mode; userMessage: string; sessionId: string; intent: Intent }) {
   const { mode, userMessage, sessionId, intent } = opts;
-  const h = getHistory(sessionId).slice(-8);
+  const h = getHistory(sessionId).slice(-12);
   const transcript = h.map((x) => `${x.role === "user" ? "USER" : "COACH"}: ${x.text}`).join("\n");
 
   const strategySystem = `You are Spark — a top-tier, human-like dating coach and relationship strategist. Behave like a real coach: warm, confident, direct, and decisive. Never say "As an AI" or similar. Do NOT output JSON. Follow this coach response frame:
@@ -109,10 +109,22 @@ Match the user's vibe. For `rizz` mode prioritize playful, confident, flirt-forw
 
   const system = mode === "strategy" ? strategySystem : coachSystem;
 
-  const user = `Conversation so far:\n${transcript}\n\nNew user message:\n${userMessage}\n\nWrite the coach reply now.`;
+  // Build chat messages: system, conversation history (user/assistant), final user instruction
+  const historyMessages = h.map((turn) => ({
+    role: turn.role === "user" ? "user" : "assistant",
+    content: String(turn.text || ""),
+  }));
+
+  const finalUserContent = `Mode: ${mode}\n\nLatest user message:\n${userMessage}\n\nPlease reply as the coach to the latest user message. Use empathy, give a clear next step, provide 2-3 short message options labeled by tone, and ask at most one clarifying question if needed. Output plain natural language only.`;
+
+  const messages = [
+    { role: "system", content: system },
+    ...historyMessages,
+    { role: "user", content: finalUserContent },
+  ];
 
   const model = process.env.OLLAMA_MODEL || "llama3.1";
-  const raw = await ollamaChat({ model, system, user, temperature: 0.25 });
+  const raw = await ollamaChat({ model, messages, temperature: 0.25 });
   return raw as unknown;
 }
 
