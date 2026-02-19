@@ -339,7 +339,7 @@ export default function PremiumDatingAdvicePage() {
           <div className="fixed inset-0 z-50">
             <div className="absolute inset-0 bg-black/50" onClick={() => setShowModal(false)} />
 
-            <div className="relative z-10 flex min-h-full items-center justify-center p-4">
+            <div className="relative z-10 flex min-h-screen items-center justify-center p-4">
               <div role="dialog" aria-modal="true" className="w-full max-w-xl rounded-2xl border border-zinc-200 bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start p-6">
                   <div className="lg:col-span-2">
