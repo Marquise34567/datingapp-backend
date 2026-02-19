@@ -14,6 +14,7 @@ interface ComposerProps {
   loading?: boolean;
   placeholder?: string;
   disabledSend?: boolean;
+  isPremium?: boolean;
 }
 
 const Composer: React.FC<ComposerProps> = ({
@@ -26,6 +27,7 @@ const Composer: React.FC<ComposerProps> = ({
   loading = false,
   placeholder,
   disabledSend = false,
+  isPremium = false,
 }) => {
   const taRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -77,6 +79,16 @@ const Composer: React.FC<ComposerProps> = ({
       <div className="composer-bottom mt-3 flex items-center justify-between gap-2">
         <div className="text-xs text-muted">Enter to send • Shift+Enter for newline • Privacy-first</div>
 
+        <div className="flex items-center gap-4">
+          <div className="text-xs text-zinc-500">
+            {isPremium ? (
+              <span className="font-semibold">Tone controls enabled</span>
+            ) : (
+              <span>Tone controls (Premium)</span>
+            )}
+          </div>
+
+          </div>
         <div className="flex items-center gap-2">
           <Button
             type="button"

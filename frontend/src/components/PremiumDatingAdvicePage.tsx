@@ -239,11 +239,27 @@ export default function PremiumDatingAdvicePage() {
     }
   }
 
+  async function contactSupport() {
+    try {
+      const res = await fetch(`${process.env.API_URL || ''}/api/support`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw j;
+      alert('Support request sent. We will respond shortly.');
+    } catch (err) {
+      console.warn('support error', err);
+      alert('Support request failed. Premium only.');
+    }
+  }
+
   return (
     <div className="min-h-screen app-bg">
       {/* Top Nav */}
       <header className="sticky top-0 z-20 border-b border-white/10 bg-linear-to-br from-white/5 to-white/10 backdrop-blur-md">
-          <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
           <div className="flex items-center gap-3">
             <div className="h-9 w-9 rounded-2xl bg-linear-to-br from-zinc-950 to-zinc-700 text-white grid place-items-center">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden="true">
@@ -256,15 +272,21 @@ export default function PremiumDatingAdvicePage() {
             </div>
           </div>
 
-            <div className="flex items-center gap-2">
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                Good
-              </span>
-              <span className="text-sm text-zinc-500">7.4/10</span>
-              <Button size="sm" variant="primary" className="ml-2" onClick={() => setShowModal(true)}>
-                Upgrade
+          <div className="flex items-center gap-2">
+            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+              {entitlements && entitlements.isPremium ? 'Premium' : 'Free'}
+            </span>
+            {entitlements && entitlements.isPremium ? (
+              <Button type="button" variant="ghost" size="sm" onClick={contactSupport}>
+                Contact Priority Support
               </Button>
-            </div>
+            ) : null}
+
+            <span className="text-sm text-zinc-500">7.4/10</span>
+            <Button size="sm" variant="primary" className="ml-2" onClick={() => setShowModal(true)}>
+              Upgrade
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -337,6 +359,7 @@ export default function PremiumDatingAdvicePage() {
                     loading={loading}
                     disabledSend={dailyLimitReached}
                     placeholder={placeholderText}
+                    isPremium={!!entitlements?.isPremium}
                   />
                 </div>
               </div>
@@ -438,7 +461,7 @@ export default function PremiumDatingAdvicePage() {
                     </div>
 
                     <div className="lg:col-span-1">
-                      <div className="rounded-xl border border-zinc-100 p-4 shadow-sm bg-gradient-to-br from-white to-zinc-50">
+                      <div className="rounded-xl border border-zinc-100 p-4 shadow-sm bg-linear-to-br from-white to-zinc-50">
                         <div className="text-xs text-zinc-500">Your plan</div>
                         <div className="mt-2 text-lg font-semibold">Spark Premium</div>
                         <div className="mt-3">
