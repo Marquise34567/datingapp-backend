@@ -38,6 +38,21 @@ app.post('/api/admin/set-premium', (req, res) => {
   }
 });
 
+// Dev stub: create a checkout session and return a checkout URL.
+app.post('/api/checkout', (req, res) => {
+  const sessionId = (req.body && req.body.sessionId) || req.headers['x-session-id'];
+  if (!sessionId) return res.status(400).json({ ok: false, error: 'sessionId required' });
+  try {
+    const base = process.env.CHECKOUT_BASE || 'https://checkout.example.com';
+    const returnUrl = process.env.CHECKOUT_RETURN || `http://localhost:${process.env.PORT || 5173}`;
+    const url = `${base}/?sessionId=${encodeURIComponent(String(sessionId))}&returnUrl=${encodeURIComponent(returnUrl)}`;
+    return res.json({ ok: true, url });
+  } catch (err) {
+    console.warn('checkout create failed', err);
+    return res.status(500).json({ ok: false, error: 'Failed to create checkout' });
+  }
+});
+
 const port = Number(process.env.PORT || 4000);
 const host = process.env.HOST || '0.0.0.0';
 
