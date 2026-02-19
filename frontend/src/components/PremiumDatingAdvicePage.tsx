@@ -241,7 +241,7 @@ export default function PremiumDatingAdvicePage() {
 
   async function contactSupport() {
     try {
-      const res = await fetch(`${process.env.API_URL || ''}/api/support`, {
+      const res = await fetch(`/api/support`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId }),

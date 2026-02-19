@@ -1,8 +1,5 @@
 export async function createCheckoutSession(sessionId?: string) {
-  const API_URL = import.meta.env.VITE_API_URL;
-  if (!API_URL) throw new Error('No API_URL configured');
-
-  const res = await fetch(`${API_URL}/api/checkout`, {
+  const res = await fetch(`/api/checkout`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ uid: sessionId }),
