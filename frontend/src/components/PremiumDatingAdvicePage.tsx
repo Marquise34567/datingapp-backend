@@ -2,6 +2,7 @@
 
 import React, { useMemo, useRef, useState, useEffect } from "react";
 import { fetchAdvice } from "../lib/advice";
+import { apiFetch } from "../lib/api";
 import Button from "./ui/Button";
 import Composer from "./ui/Composer";
 import { createCheckoutSession } from "../lib/checkout";
@@ -62,9 +63,9 @@ export default function PremiumDatingAdvicePage() {
     (async () => {
       try {
         // ensure cookie token exists
-        await fetch('/api/token', { method: 'POST', credentials: 'include' });
+        await apiFetch('/token', { method: 'POST' });
 
-        const r = await fetch('/api/chat/init', { method: 'POST', credentials: 'include' });
+        const r = await apiFetch('/chat/init', { method: 'POST' });
         const data = await r.json().catch(() => null);
         if (cancelled) return;
         if (!data || !data.ok) throw new Error(data?.error || 'init failed');
@@ -225,7 +226,7 @@ export default function PremiumDatingAdvicePage() {
     try {
       const fd = new FormData();
       fd.append('image', file);
-      const r = await fetch('/api/screenshot-coach', { method: 'POST', body: fd });
+      const r = await apiFetch('/screenshot-coach', { method: 'POST', body: fd });
       const json = await r.json();
       if (!json || !json.ok) {
         setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'assistant', text: `Error: ${json?.error || 'Unknown'}` }]);

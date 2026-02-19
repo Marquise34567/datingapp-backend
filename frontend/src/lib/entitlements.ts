@@ -8,11 +8,14 @@ export type Entitlements = {
   advanced: boolean;
 };
 
+import { apiFetch, apiUrl } from './api';
+
 export async function fetchEntitlements(sessionId?: string): Promise<Entitlements> {
   try {
     let path = '/api/me/entitlements';
     if (sessionId) path += `?sessionId=${encodeURIComponent(sessionId)}`;
-    const res = await fetch(path, { method: 'GET' });
+    const url = apiUrl(path);
+    const res = await apiFetch(path, { method: 'GET' });
     const text = await res.text();
     try {
       const data = text ? JSON.parse(text) : {};
