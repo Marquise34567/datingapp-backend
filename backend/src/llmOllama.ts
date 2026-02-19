@@ -23,16 +23,6 @@ export async function ollamaChat(opts: {
     stream: false,
   } as any;
 
-  if (process.env.NODE_ENV !== "production") {
-    try {
-      const preview = JSON.stringify(body).slice(0, 300);
-      console.debug("[ollama->send]", preview);
-      // debug meta removed
-    } catch (e) {
-      console.debug("[ollama->send] (unserializable)");
-    }
-  }
-
   const r = await fetch(process.env.OLLAMA_URL || "http://localhost:11434/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -46,22 +36,11 @@ export async function ollamaChat(opts: {
 
   const data: any = await r.json();
 
-  // debug logs removed
-
   const content =
     data?.choices?.[0]?.message?.content ??
     data?.choices?.[0]?.message ??
     data?.response ??
     "";
-
-  if (process.env.NODE_ENV !== "production") {
-    try {
-      const preview = String(content).slice(0, 300);
-      console.debug("[ollama<-resp]", preview);
-    } catch (e) {
-      console.debug("[ollama<-resp] (unserializable)");
-    }
-  }
 
   return (typeof content === "string" ? content : String(content)).trim();
 }

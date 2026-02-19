@@ -1,5 +1,5 @@
-import { getHistory, pushTurn, getSessionMemory } from "./memoryStore.js";
-import { ollamaChat } from "./llmOllama.js";
+import { getHistory, pushTurn, getSessionMemory } from "./memoryStore";
+import { ollamaChat } from "./llmOllama";
 
 type Mode = "dating_advice" | "rizz" | "strategy";
 type Intent =
@@ -73,8 +73,6 @@ function alreadyAsked(h: string, marker: string) {
   return h.includes(marker);
 }
 
-type CoachReply = { message?: string; reply?: string; text?: string; advice?: string; error?: string };
-
 function extractMessage(data: unknown): string {
   if (!data) return "";
   if (typeof data === "string") return data;
@@ -87,15 +85,6 @@ async function llmAssist(opts: { mode: Mode; userMessage: string; sessionId: str
   const h = getHistory(sessionId).slice(-12);
   const transcript = h.map((x) => `${x.role === "user" ? "USER" : "COACH"}: ${x.text}`).join("\n");
 
-  const strategySystem = `You are Spark — a top-tier, human-like dating coach and relationship strategist. Behave like a real coach: warm, confident, direct, and decisive. Never say "As an AI" or similar. Do NOT output JSON. Follow this coach response frame:
-
-- Validate: 1–2 lines of empathy/understanding (specific).
-- Read the room: 1–3 possible meanings of the situation.
-- Clear next step: one concrete action the user should take now.
-- Words to say: 2–4 short message options labeled by tone.
-- Ask at most one targeted clarifying question, only if needed.
-
-For `strategy` mode: focus on big-picture assessment, quick verdict, timeline, and one prioritized next move. Output short paragraphs and bullets, 6–12 lines total. No fluff.`;
   const baseSystem = `You are Spark — an elite, human dating coach (top 1%). You respond like a real person: warm, sharp, emotionally intelligent, decisive.
 
 NON-NEGOTIABLE RULES:
@@ -136,7 +125,6 @@ Follow these rules strictly; output plain natural language only.`;
 
   const system = mode === "strategy" ? `${personaSystem}\n\n(Strategy mode: prioritize big-picture assessment, timeline, and one prioritized move.)` : personaSystem;
 
-  // Build chat messages: system, conversation history (user/assistant), final user instruction
   const historyMessages = h.map((turn) => ({
     role: turn.role === "user" ? "user" : "assistant",
     content: String(turn.text || ""),
