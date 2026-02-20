@@ -1,5 +1,5 @@
 import express from 'express';
-import cors from 'cors';
+import cors, { CorsOptions } from 'cors';
 import cookieParser from 'cookie-parser';
 import os from 'os';
 import multer from 'multer';
@@ -120,27 +120,28 @@ const app = express();
 app.set('trust proxy', 1);
 
 // BACKEND (Express)
-const allowlist = [
+const allowedOrigins = new Set<string>([
+  "http://localhost:3000",
+  "http://localhost:3001",
   "https://sparkdd.live",
   "https://www.sparkdd.live",
-  // your Vercel preview domains (wildcards need custom logic)
-];
+  // add your Vercel preview domains if you use them:
+  // "https://your-vercel-app.vercel.app",
+]);
 
-app.use(cors({
-  origin: (origin, cb) => {
-    if (!origin) return cb(null, true); // curl/postman
-    // allow sparkdd + vercel previews
-    const ok =
-      allowlist.includes(origin) ||
-      origin.endsWith('.vercel.app');
-    cb(ok ? null : new Error('Not allowed by CORS'), ok);
+const corsOptions: CorsOptions = {
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    // allow non-browser requests (curl/postman) that have no origin
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.has(origin)) return callback(null, true);
+
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
   },
   credentials: true,
-  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization'],
-}));
+};
 
-app.options('*', cors());
+app.use(cors(corsOptions));
 app.use(cookieParser());
 // Important: Stripe webhook needs the raw body. Register the raw parser
 // route before the JSON body parser middleware so the raw payload is available.
