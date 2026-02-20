@@ -1,4 +1,4 @@
- on the maintence overlay the entire page is jimport React, { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
 
@@ -30,7 +30,7 @@ export default function Maintenance() {
     return `${s}s`;
   };
 
-  const backTime = new Date(Date.now() + remainingMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  // ETA removed per request
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center">
@@ -58,7 +58,7 @@ export default function Maintenance() {
         </div>
 
         <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-sm text-zinc-300">Estimated remaining: <span className="font-semibold text-white">{formatMs(remainingMs)}</span> — back by <span className="font-medium text-white">{backTime}</span></div>
+          <div className="text-sm text-zinc-300">Estimated remaining: <span className="font-semibold text-white">{formatMs(remainingMs)}</span></div>
           <div className="flex items-center gap-3">
             <a href="#" onClick={(e) => e.preventDefault()} className="inline-flex items-center gap-2 rounded-full bg-linear-to-br from-amber-400 to-amber-500 px-4 py-2 text-sm font-semibold text-zinc-900 shadow-lg hover:scale-[1.02] transition-transform">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5"/></svg>
