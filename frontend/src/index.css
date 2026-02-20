@@ -227,3 +227,32 @@ main.mx-auto{margin-left:auto;margin-right:auto;max-width:72rem;padding:2.5rem 1
 	.main-grid{grid-template-columns:1fr 380px}
 }
 
+/* Chat scroll: compute available height dynamically so it fits on mobile */
+.chat-scroll{overflow-y:auto;max-height:calc(100vh - 220px);padding-bottom:12px}
+
+/* Mobile adjustments */
+@media (max-width:640px){
+	/* reduce the chat scroll reserved space on small screens (smaller header/composer) */
+	.chat-scroll{max-height:calc(100vh - 160px)}
+
+	/* ensure composer controls wrap and remain reachable */
+	.composer-panel{padding:10px}
+	.composer-top{display:flex;flex-wrap:wrap;gap:8px}
+	.composer-top .ml-4{margin-left:0}
+	.composer-bottom{flex-wrap:wrap;gap:8px}
+	.composer-bottom .text-xs{order:2;width:100%}
+	.composer-bottom > .flex.items-center{order:1;width:100%;justify-content:flex-end}
+
+	/* make main content use full width with sensible padding */
+	main.mx-auto{padding-left:1rem;padding-right:1rem}
+
+	/* ensure buttons are touch-friendly */
+	.btn, .send-button, .top-cta{padding:12px 16px}
+
+	/* allow chat bubbles to use more width on small screens */
+	.rounded-3xl.border .space-y-3 > div > div{max-width:95%}
+}
+
+/* Respect safe-area on modern phones with a notch */
+body{padding-bottom:env(safe-area-inset-bottom)}
+

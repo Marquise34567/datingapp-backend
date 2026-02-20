@@ -315,7 +315,7 @@ export default function PremiumDatingAdvicePage() {
             {/* Messages */}
             <div
               ref={listRef}
-              className="h-[56vh] chat-scroll px-4 py-4"
+              className="chat-scroll px-4 py-4"
             >
               <div className="space-y-3">
                 {messages.map((m) => (
