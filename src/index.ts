@@ -102,6 +102,18 @@ const app = express();
 
 app.use(cors({ origin: true, credentials: true }));
 app.use(cookieParser());
+
+// If MAINTENANCE_MODE is enabled, short-circuit requests so users only see the
+// maintenance page until the env flag is removed. API routes return 503 JSON.
+if ((process.env.MAINTENANCE_MODE || '').toLowerCase() === 'true') {
+  app.use((req, res) => {
+    if (req.path.startsWith('/api')) {
+      return res.status(503).json({ ok: false, maintenance: true, message: 'Service temporarily offline for maintenance' });
+    }
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sparkd — Maintenance</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;color:#fff;background:linear-gradient(180deg,#0f1724,#020617);} .card{width:min(720px,92%);border-radius:24px;padding:28px;background:rgba(255,255,255,0.06);backdrop-filter:blur(8px);box-shadow:0 10px 30px rgba(2,6,23,0.6);border:1px solid rgba(255,255,255,0.08)} .title{font-size:24px;margin:0 0 8px 0;font-weight:700} .msg{color:rgba(255,255,255,0.8);margin:0 0 16px 0} .actions{display:flex;gap:12px} a.button{display:inline-block;padding:10px 16px;border-radius:14px;text-decoration:none;font-weight:600} a.primary{background:#fff;color:#000} a.ghost{border:1px solid rgba(255,255,255,0.12);color:#fff;background:transparent}</style></head><body><div class="card"><h1 class="title">Sparkd is getting an upgrade</h1><p class="msg">We’re performing maintenance to improve the service. Please check back soon — thanks for your patience.</p><div class="actions"><a class="button primary" href="/">Return home</a><a class="button ghost" href="#">Check status</a></div></div></body></html>`);
+  });
+}
 // Important: Stripe webhook needs the raw body. Register the raw parser
 // route before the JSON body parser middleware so the raw payload is available.
 app.post('/api/webhook/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
