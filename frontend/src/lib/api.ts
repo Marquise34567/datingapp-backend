@@ -1,9 +1,8 @@
+const API = (process.env.NEXT_PUBLIC_API_URL as string) || "https://api.sparkdd.live";
+
 export function apiUrl(path: string) {
-  const API_BASE = import.meta.env.VITE_API_BASE ?? "";
-  const base = API_BASE ? API_BASE.replace(/\/$/, '') : '';
-  if (!base) return path.startsWith('/') ? `/api${path}` : `/api/${path}`;
   const p = path.startsWith('/') ? path : `/${path}`;
-  return `${base}/api${p}`;
+  return `${API}/api${p}`;
 }
 
 export function apiFetch(path: string, opts?: RequestInit) {
