@@ -1,6 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import type { CorsOptions } from 'cors';
 import cookieParser from 'cookie-parser';
 import os from 'os';
 import multer from 'multer';
@@ -130,7 +129,7 @@ const allowedOrigins = new Set<string>([
   // "https://your-vercel-app.vercel.app",
 ]);
 
-const corsOptions: CorsOptions = {
+const corsOptions = {
   origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
     // allow non-browser requests (curl/postman) that have no origin
     if (!origin) return callback(null, true);
@@ -142,7 +141,7 @@ const corsOptions: CorsOptions = {
   credentials: true,
 };
 
-app.use(cors(corsOptions));
+app.use(cors(corsOptions as any));
 app.use(cookieParser());
 // Important: Stripe webhook needs the raw body. Register the raw parser
 // route before the JSON body parser middleware so the raw payload is available.
