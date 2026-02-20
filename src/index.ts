@@ -1,799 +1,739 @@
-import "dotenv/config";
-import express from "express";
-import cors from "cors";
-import { z } from "zod";
-import crypto from "crypto";
-import { coachBrainV2 } from "./coachBrainV2.js";
-import { pushTurn } from "./memoryStore.js";
+import express from 'express';
+import cors from 'cors';
+import cookieParser from 'cookie-parser';
+import os from 'os';
+import multer from 'multer';
+import { adviceRouter } from './routes/advice';
+import { getEntitlements, setPremium, getDailyRemaining } from './entitlements';
+import redisClient, { incrementWeeklyUsage, getWeeklyUsage, isTokenPaid, markTokenPaid, setPaid, unsetPaid, isPaid } from './upstash';
+import { appendPurchaseRow } from './googleSheets';
+import { google } from 'googleapis';
+
+// --- Google Sheets helper ---
+function getGoogleAuth() {
+  const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL!;
+  const privateKey = process.env.GOOGLE_PRIVATE_KEY!.replace(/\\n/g, "\n");
+
+  return new google.auth.JWT({
+    email: clientEmail,
+    key: privateKey,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
+}
+
+async function appendTestRow() {
+  const auth = getGoogleAuth();
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  const spreadsheetId = process.env.GOOGLE_SHEET_ID!;
+  const tab = process.env.GOOGLE_SHEET_TAB || 'Sheet1';
+
+  const now = new Date().toISOString();
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: `${tab}!A:E`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: {
+      values: [[`test_${Date.now()}`, 'test@example.com', 'cus_TEST', 'cs_TEST', now]],
+    },
+  });
+}
+
+// Ollama config
+const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
+const OLLAMA_VISION_MODEL = process.env.OLLAMA_VISION_MODEL || 'llama3.2-vision';
+// Free daily limit (default 5)
+const FREE_DAILY_LIMIT = Number(process.env.FREE_DAILY_LIMIT || 5);
+
+function secondsUntilMidnightLocal() {
+  const now = new Date();
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
+  return Math.max(60, Math.floor((midnight.getTime() - now.getTime()) / 1000));
+}
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
+
+async function callOllamaChat(body: any) {
+  const url = `${OLLAMA_URL.replace(/\/$/, '')}/api/chat`;
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '<no body>');
+    throw new Error(`Ollama /api/chat failed ${res.status}: ${txt}`);
+  }
+  return res.json();
+}
+
+async function callOllamaGenerate(body: any) {
+  const url = `${OLLAMA_URL.replace(/\/$/, '')}/api/generate`;
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '<no body>');
+    throw new Error(`Ollama /api/generate failed ${res.status}: ${txt}`);
+  }
+  return res.json();
+}
+
+function extractTextFromOllamaResponse(resp: any): string {
+  try {
+    // Flexible extraction depending on response shape
+    if (!resp) return '';
+    // common shapes: { choices: [{ message: { content: '...' } }] } or { choices: [{ content: '...' }] }
+    if (Array.isArray(resp.choices) && resp.choices.length) {
+      const c = resp.choices[0];
+      if (c.message && (c.message.content || c.message)) {
+        return typeof c.message.content === 'string' ? c.message.content : (c.message.content ?? JSON.stringify(c.message));
+      }
+      if (c.content) return typeof c.content === 'string' ? c.content : JSON.stringify(c.content);
+      // some models embed text in c.text or c.output
+      if (c.text) return String(c.text);
+      if (c.output) return typeof c.output === 'string' ? c.output : JSON.stringify(c.output);
+    }
+    // fallbacks: resp.output, resp.text
+    if (resp.output) return typeof resp.output === 'string' ? resp.output : JSON.stringify(resp.output);
+    if (resp.text) return String(resp.text);
+    return JSON.stringify(resp);
+  } catch (e) {
+    return '';
+  }
+}
 
 const app = express();
 
-app.use(
-	cors({
-		origin: [
-			"http://localhost:5173",
-			"http://localhost:5174",
-			"http://localhost:5175",
-		],
-		credentials: true,
-	})
-);
-app.use(express.json({ limit: "1mb" }));
+app.use(cors({ origin: true, credentials: true }));
+app.use(cookieParser());
+// Important: Stripe webhook needs the raw body. Register the raw parser
+// route before the JSON body parser middleware so the raw payload is available.
+app.post('/api/webhook/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = (req.headers['stripe-signature'] || '') as string;
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (!webhookSecret) return res.status(400).json({ ok: false, error: 'webhook not configured' });
+  try {
+    const Stripe = require('stripe');
+    const stripeSecretEnv = process.env.STRIPE_SECRET_KEY || process.env.STRIPE_SECRET;
+    const stripe = new Stripe(String(stripeSecretEnv), { apiVersion: '2022-11-15' });
+    const event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
 
-// Simple in-memory session store keyed by a session id sent in `x-session-id` header
-type SessionData = { conversationHistory: Array<{ role: "user" | "assistant"; content: string }> };
-const sessions = new Map<string, SessionData>();
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object as any;
+      const token = session.client_reference_id || (session.metadata && session.metadata.token) || session.metadata?.token;
+      const uid = token || session.client_reference_id || (session.metadata && session.metadata.sessionId) || session.metadata?.uid;
+      const customer = session.customer;
+      if (uid) {
+        try {
+          setPremium(uid, true, 'premium');
+        } catch (e) {
+          console.warn('failed to set premium from webhook', e);
+        }
+      }
 
-// Middleware: ensure a session id and attach session data to request
-app.use((req, res, next) => {
-	let sid = req.headers["x-session-id"] as string | undefined;
+      // mark token paid in Upstash and append to Google Sheet
+      try {
+        if (token) {
+          await markTokenPaid(String(token));
+          try {
+            // also set premium flag for the user id used as client_reference_id
+            await (redisClient as any).set(`user:${String(token)}:premium`, 'true');
+            // keep this key long lived
+            try { await (redisClient as any).expire(`user:${String(token)}:premium`, 60 * 60 * 24 * 365); } catch (e) { /* ignore */ }
+          } catch (e) {
+            console.warn('failed to set user premium flag in redis', e);
+          }
+          const subs = session.subscription as any;
+          const subscriptionId = subs && subs.id ? subs.id : (session.subscription as string) || null;
+          const customerId = String(customer || '');
+          const ts = new Date().toISOString();
+          await appendPurchaseRow([String(token), String(event.id || ''), customerId, String(subscriptionId || ''), ts]);
+        }
+      } catch (e) {
+        console.warn('failed to mark token paid or append sheet', e);
+      }
 
-	// If cookie header contains sid=..., prefer that if header not provided
-	if (!sid && typeof req.headers.cookie === "string") {
-		const match = req.headers.cookie.match(/(?:^|; )sid=([^;]+)/);
-		if (match) sid = decodeURIComponent(match[1]);
-	}
+      if (customer && uid) {
+        try {
+          const subs = session.subscription as any;
+          const periodEndISO = subs && subs.current_period_end ? new Date(subs.current_period_end * 1000).toISOString() : null;
+          const subscriptionId = subs && subs.id ? subs.id : (session.subscription as string) || null;
+          try {
+            const { updateStripeInfo } = require('./entitlements');
+            updateStripeInfo(uid, { customerId: String(customer), subscriptionId: subscriptionId, currentPeriodEnd: periodEndISO });
+          } catch (e) {
+            console.warn('failed to update stripe info', e);
+          }
+        } catch (e) {
+          console.warn('failed to process session subscription info', e);
+        }
+      }
+    }
 
-	if (!sid) {
-		sid = crypto.randomBytes(12).toString("hex");
-		// expose new sid to client so it can be reused
-		res.setHeader("x-session-id", sid);
-		// also set a cookie for convenience (frontend can persist it)
-		res.setHeader("Set-Cookie", `sid=${sid}; Path=/; HttpOnly`);
-	}
+    if (event.type === 'customer.subscription.deleted' || event.type === 'invoice.payment_failed') {
+      const obj = event.data.object as any;
+      const customerId = obj.customer;
+      try {
+        const { entitlementsStore, updateStripeInfo, setPremium } = require('./entitlements');
+        for (const [uid, val] of entitlementsStore) {
+          if (val.stripeCustomerId === customerId) {
+            updateStripeInfo(uid, { currentPeriodEnd: null });
+            setPremium(uid, false, null);
+          }
+        }
+      } catch (e) {
+        console.warn('failed to handle subscription deletion', e);
+      }
+    }
 
-	if (!sessions.has(sid)) {
-		sessions.set(sid, { conversationHistory: [] });
-	}
+    res.json({ received: true });
+  } catch (err: any) {
+    console.warn('webhook handling error', err && err.message);
+    return res.status(400).json({ ok: false, error: 'invalid webhook event' });
+  }
+});
+// Ensure body parsing is configured before routes and with sane limits
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true }));
 
-	// attach to request (as any to avoid TS type noise)
-	(req as any).sessionId = sid;
-	(req as any).sessionData = sessions.get(sid);
-	next();
+// --- TEST ROUTE ---
+app.get('/api/debug/sheets-append', async (req, res) => {
+  try {
+    await appendTestRow();
+    res.json({ ok: true, message: 'Appended a test row. Check your Google Sheet.' });
+  } catch (err: any) {
+    res.status(500).json({
+      ok: false,
+      error: err?.message || 'Failed to append row',
+      hint:
+        'Check env vars + that the sheet is shared with the service account email (Editor).',
+    });
+  }
 });
 
-/* ===============================
-	 REQUEST VALIDATION
-================================ */
-
-const AdviceRequestSchema = z.object({
-	situation: z.string().min(2),
-	goal: z.string().min(2),
-	tone: z.string().optional(),
-	context: z
-		.object({
-			myAge: z.number().optional(),
-			theirAge: z.number().optional(),
-			relationshipType: z.string().optional(),
-			constraints: z.array(z.string()).optional(),
-		})
-		.optional(),
-	conversation: z
-		.array(
-			z.object({
-				from: z.enum(["me", "them"]),
-				text: z.string().min(1),
-			})
-		)
-		.default([]),
-	userMessage: z.string().min(1),
+// Debug route to test Upstash Redis connectivity
+app.get('/api/debug/redis', async (req, res) => {
+  try {
+    const ts = Date.now();
+    const key = 'debug:ping';
+    const val = `pong_${ts}`;
+    await (redisClient as any).set(key, val);
+    await (redisClient as any).expire(key, 60);
+    const got = await (redisClient as any).get(key);
+    return res.json({ ok: true, val: got });
+  } catch (e: any) {
+    console.warn('redis debug failed', e);
+    return res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
 });
 
-/* ===============================
-	 SAFETY FILTER
-================================ */
-
-function safetyCheck(payload: any) {
-	const text = JSON.stringify(payload).toLowerCase();
-
-	const blockedKeywords = [
-		"manipulate",
-		"make her jealous",
-		"make him jealous",
-		"blackmail",
-		"coerce",
-		"stalk",
-		"track location",
-		"minor",
-		"underage",
-	];
-
-	if (blockedKeywords.some((k) => text.includes(k))) {
-		return {
-			blocked: true,
-			message:
-				"I can’t help with manipulation, coercion, stalking, or anything involving minors. I can help you communicate respectfully and confidently instead.",
-		};
-	}
-
-	return { blocked: false };
-}
-
-/* ===============================
-	 PLAYBOOK SELECTOR
-================================ */
-
-function selectPlaybook(situation: string, goal: string) {
-	const text = `${situation} ${goal}`.toLowerCase();
-
-	if (text.includes("ghost") || text.includes("no response"))
-		return "calm-followup";
-
-	if (text.includes("breakup") || text.includes("closure"))
-		return "kind-clarity";
-
-	if (text.includes("argument") || text.includes("fight"))
-		return "repair";
-
-	if (text.includes("first date") || text.includes("second date") || text.includes("plan"))
-		return "momentum-plan";
-
-	return "general";
-}
-
-/* ===============================
-	 ADVICE GENERATOR (MVP)
-	 Replace with real LLM later
-================================ */
-
-async function generateAdvice(data: any) {
-	const playbook = selectPlaybook(data.situation, data.goal);
-
-	return {
-		insights: {
-			detectedIntent: "positive/neutral",
-			momentum: data.conversation.length > 0 ? "medium" : "low",
-			emotionalTone: data.tone || "balanced",
-			riskFlags: [],
-			summary:
-				"Based on the context, keeping things confident and simple will increase your chances.",
-		},
-
-		strategy: {
-			playbook,
-			headline: "Match energy + move things forward",
-			why:
-				"Short, confident messages reduce anxiety and make it easier for them to say yes.",
-			do: [
-				"Keep messages under 2 sentences",
-				"Offer a clear next step",
-				"Stay relaxed and grounded",
-			],
-			dont: [
-				"Over-explain",
-				"Pressure them",
-				"Double-text immediately",
-			],
-		},
-
-		replies: {
-			playful: [
-				"Alright troublemaker 😄 when are you free this week?",
-				"Careful… I might have to see you again. Thu or Sat?"
-			],
-			confident: [
-				"Let’s run it back. Are you free Thursday evening?",
-				"I’d like to see you again. What day works for you?"
-			],
-			smooth: [
-				"I had a good time. Let’s grab something low-key this week.",
-				"You free this weekend? I’ve got an idea."
-			]
-		},
-
-		datePlan: {
-			planA: {
-				idea: "Coffee + walk",
-				time: "Thursday 7pm",
-				vibe: "Chill, easy chemistry build"
-			},
-			planB: {
-				idea: "Tacos + arcade",
-				time: "Saturday 4pm",
-				vibe: "Fun, playful energy"
-			},
-			followUpIfNoResponse:
-				"No worries if you’re busy — what day works better for you?"
-		},
-
-		nextSteps: [
-			"Send one confident message.",
-			"Wait for response.",
-			"If positive, lock exact time + place.",
-			"If no reply after 24–48 hours, send one calm follow-up."
-		],
-
-		boundaries: [
-			"Respect a no.",
-			"Avoid manipulation tactics.",
-			"Stay honest and direct."
-		]
-	};
-}
-
-/* ===============================
-	 ROUTES
-================================ */
-
-type AdviceRequest = {
-	situation?: string;
-	goal?: string;
-	tone?: string;
-	conversation?: Array<{ from: string; text: string }>;
-	userMessage?: string;
-};
-
-function normalizeTone(tone?: string) {
-	const t = (tone || "").toLowerCase();
-	if (t.includes("play")) return "playful";
-	if (t.includes("sweet") || t.includes("warm")) return "sweet";
-	if (t.includes("direct")) return "direct";
-	return "confident";
-}
-
-function detectTopic(text: string) {
-	const t = text.toLowerCase();
-
-	const has = (words: string[]) => words.some((w) => t.includes(w));
-
-	if (has(["break up", "breakup", "dump", "ended", "ex", "no contact"])) return "breakup";
-	if (has(["cheat", "cheated", "lying", "trust", "sneak", "dm", "texting other"])) return "trust";
-	if (has(["fight", "argue", "argument", "mad at", "upset", "silent treatment"])) return "conflict";
-	if (has(["family", "mom", "dad", "parents", "brother", "sister", "in-law", "in laws"])) return "family";
-	if (has(["relationship", "bf", "girlfriend", "boyfriend", "partner", "marriage", "husband", "wife"])) return "relationship";
-	if (has(["date", "first date", "second date", "hang out", "link", "meet up"])) return "dating";
-	if (has(["boundary", "boundaries", "respect", "space", "clingy", "needy"])) return "boundaries";
-	if (has(["what do i say", "reply", "respond", "text", "message", "snap"])) return "texting";
-	return "general";
-}
-
-function buildReplies(tone: string, topic: string, userMessage: string) {
-	// Keep all replies short (1–2 sentences)
-	const confident = ["AI is temporarily unavailable. Please try again."];
-
-	const playful = ["AI is temporarily unavailable. Please try again."];
-
-	const sweet = ["AI is temporarily unavailable. Please try again."];
-
-	const direct = ["AI is temporarily unavailable. Please try again."];
-
-	// Topic-specific “best reply” bias
-	if (topic === "family") {
-		confident[0] = "I hear you. What would feel respectful to you and your family right now?";
-		sweet[0] = "That sounds heavy. Do you want comfort, advice, or a plan for what to say?";
-		direct[0] = "What’s the exact outcome you want with your family here?";
-	}
-
-	if (topic === "conflict") {
-		confident[0] = "I want to understand you—not win. Can we talk calmly about what happened?";
-		sweet[0] = "I’m sorry this hurt. I care about us—can we reset and talk it through?";
-		direct[0] = "This pattern isn’t working. Let’s talk today and agree on a better way.";
-	}
-
-	if (topic === "breakup") {
-		confident[0] = "I respect your decision. I’m going to take space and focus on myself.";
-		sweet[0] = "I’m sad, but I respect it. I’m going to step back and heal.";
-		direct[0] = "Understood. I won’t argue—take care.";
-	}
-
-	if (topic === "trust") {
-		confident[0] = "I need honesty to feel safe. Can you tell me the full truth so we can decide what’s next?";
-		sweet[0] = "I want to rebuild trust, but I need openness. Can we talk honestly about what happened?";
-		direct[0] = "If there’s cheating or lying, I’m out. Tell me the truth right now.";
-	}
-
-	// Return in your UI’s shape
-	return { confident, playful, sweet, direct };
-}
-
-function buildStrategy(topic: string, tone: string) {
-	const baseDo = [
-		"Keep messages under 1–2 sentences",
-		"Ask one clear question",
-		"Stay calm and grounded",
-		"Match their energy without chasing"
-	];
-	const baseDont = [
-		"Over-explain",
-		"Double-text immediately",
-		"Argue over text if it’s emotional",
-		"Try to “win” the conversation"
-	];
-
-	const headlineMap: Record<string, string> = {
-		dating: "Move it forward with a clear plan",
-		texting: "Keep it short, confident, and easy to reply to",
-		relationship: "Lead with clarity and respect",
-		family: "Stay respectful and set a calm plan",
-		conflict: "De-escalate, then solve the real issue",
-		breakup: "Protect your dignity and heal",
-		trust: "Ask for truth + set boundaries",
-		boundaries: "Be firm, kind, and specific",
-		general: "Clarity beats confusion"
-	};
-
-	const whyMap: Record<string, string> = {
-		dating: "A specific plan removes uncertainty and makes it easy to say yes.",
-		texting: "Short messages feel confident and reduce anxiety for both people.",
-		relationship: "Respectful clarity prevents mixed signals and resentment.",
-		family: "Family situations improve when you stay calm and focus on outcomes.",
-		conflict: "De-escalation stops damage; then you can fix the real problem.",
-		breakup: "Dignity now saves you pain later and speeds up healing.",
-		trust: "You can’t rebuild without full honesty and clear boundaries.",
-		boundaries: "Specific boundaries prevent repeated issues and protect your peace.",
-		general: "Clear intent creates faster, healthier outcomes."
-	};
-
-	const headline = headlineMap[topic] || headlineMap.general;
-	const why = whyMap[topic] || whyMap.general;
-
-	// Topic tweaks
-	const doExtra: Record<string, string[]> = {
-		conflict: ["Use ‘I feel / I need’ language", "Propose a quick call if text is escalating"],
-		family: ["Name the boundary kindly", "Offer a compromise if appropriate"],
-		trust: ["Ask for specifics once, not endlessly", "Decide consequences ahead of time"],
-		breakup: ["Mute/unfollow if needed", "Talk to friends, sleep, hydrate—stabilize"],
-		boundaries: ["State the boundary + consequence once", "Follow through calmly"]
-	};
-
-	const dontExtra: Record<string, string[]> = {
-		conflict: ["Bring up 10 old problems at once", "Insult or label them"],
-		trust: ["Become a detective forever", "Threaten unless you mean it"],
-		breakup: ["Beg", "Send long paragraphs"],
-		family: ["Yell or disrespect", "Let guilt decide for you"],
-		boundaries: ["Set boundaries you won’t enforce", "Argue about your boundary"]
-	};
-
-	const doList = [...baseDo, ...(doExtra[topic] || [])];
-	const dontList = [...baseDont, ...(dontExtra[topic] || [])];
-
-	// Tone tweaks (light touch)
-	if (tone === "playful") doList.unshift("Add one light, positive line (no sarcasm)");
-	if (tone === "direct") doList.unshift("Be concise and specific");
-	if (tone === "sweet") doList.unshift("Add warmth without over-apologizing");
-
-	return { headline, why, do: doList, dont: dontList };
-}
-
-function buildDatePlan(topic: string) {
-	if (topic === "dating") {
-		return {
-			idea: "Low-pressure first date: coffee + short walk",
-			textToSend: "Let’s do coffee this week—are you free Thursday or Saturday?",
-			logistics: ["Pick 2 time options", "Keep it 60–90 minutes", "Choose an easy location"]
-		};
-	}
-	if (topic === "family") {
-		return {
-			idea: "Calm 10-minute talk focused on the outcome",
-			textToSend: "Can we talk for 10 minutes tonight? I want to handle this respectfully and find a plan.",
-			logistics: ["Choose a calm time", "Write 2–3 key points", "End with a clear next step"]
-		};
-	}
-	if (topic === "conflict") {
-		return {
-			idea: "Reset + solve: short call then agreement",
-			textToSend: "I don’t want to argue over text. Can we do a quick call later and reset?",
-			logistics: ["Start with one apology if needed", "Name the issue in one sentence", "Agree on one change each"]
-		};
-	}
-	return {
-		idea: "Simple next step",
-		textToSend: "What would feel best to you as the next step—talking now or making a plan for later?",
-		logistics: ["Ask one question", "Keep it respectful", "Move to a call if it’s emotional"]
-	};
-}
-
-type Tone = "confident" | "playful" | "sweet" | "direct";
-type Vibe = "smooth" | "rizz" | "soft" | "grown" | "chill";
-
-function pickVibe(input?: string): Vibe {
-	const t = (input || "").toLowerCase();
-	if (t.includes("rizz")) return "rizz";
-	if (t.includes("soft")) return "soft";
-	if (t.includes("grown")) return "grown";
-	if (t.includes("chill")) return "chill";
-	return "smooth";
-}
-
-function cap(s: string, max = 220) {
-	const out = s.trim();
-	return out.length > max ? out.slice(0, max - 1).trim() + "…" : out;
-}
-
-function addFlavor(text: string, vibe: Vibe, tone: Tone) {
-	const emoji = (e: string) => (tone === "direct" ? "" : ` ${e}`);
-	const softener = (x: string) => (tone === "direct" ? x : x);
-
-	if (vibe === "rizz") {
-		return (
-			softener(
-				text
-					.replace("Do you want to", "You tryna")
-					.replace("Want to", "You tryna")
-					.replace("Are you free", "You free")
-					.replace("this week", "this week")
-			) + emoji("😌")
-		);
-	}
-
-	if (vibe === "chill") {
-		return text + emoji("🤝");
-	}
-
-	if (vibe === "soft") {
-		return text.replace("Let’s", "I’d love to") + emoji("🙂");
-	}
-
-	if (vibe === "grown") {
-		return text
-			.replace("Haha", "Fair")
-			.replace("lol", "")
-			.replace("😌", "")
-			.trim();
-	}
-
-	return text + (tone === "playful" ? " 😄" : tone === "sweet" ? " 🙂" : "");
-}
-
-function threePart(main: string, alt: string, q: string, vibe: Vibe, tone: Tone) {
-	const m = addFlavor(main, vibe, tone);
-	const a = addFlavor(alt, vibe, tone);
-	const question = cap(q, 120);
-	return {
-		message: cap(`${m}\n\nAlt: ${a}\n\nQuick q: ${question}`, 380),
-	};
-}
-
-function scriptsByIntent(intent: string, tone: Tone, vibe: Vibe) {
-	switch (intent) {
-		case "ask_out":
-			return threePart(
-				`Say: "You seem fun. Let’s link this week—Thu or Sat?"`,
-				`"Keep it simple—coffee or a quick drink. When you free?"`,
-				"Is this a first link or y’all already been talking?",
-				vibe,
-				tone
-			);
-
-		case "no_reply":
-			return threePart(
-				`Say: "All good. When you’re free, we can pick a day."`,
-				`"You good? Still down to link this week?"`,
-				"How long has it been—hours, a day, or a few days?",
-				vibe,
-				tone
-			);
-
-		case "apology":
-			return threePart(
-				`Say: "You right. I came wrong—my bad. I’ll move better."`,
-				`"I hear you. I’m sorry. Can we reset?"`,
-				"Do you want to fix it, or are you ready to step back?",
-				vibe,
-				tone
-			);
-
-		case "conflict":
-			return threePart(
-				`Say: "I’m not tryna go back and forth over text. Quick call later?"`,
-				`"I get you. Let’s talk when we’re both calm."`,
-				"What’s the ONE outcome you want from the talk?",
-				vibe,
-				tone
-			);
-
-		case "trust":
-			return threePart(
-				`Say: "I need the truth, straight up. Is there anything you haven’t told me?"`,
-				`"I’m not here to argue—I just need honesty so I can decide."`,
-				"Do you have proof, or is it a gut feeling?",
-				vibe,
-				tone
-			);
-
-		case "boundary":
-			return threePart(
-				`Say: "I’m not cool with that. If it happens again, I’m stepping back."`,
-				`"Respectfully, that doesn’t work for me. I need it to stop."`,
-				"What exact behavior are you setting the boundary on?",
-				vibe,
-				tone
-			);
-
-		case "define_relationship":
-			return threePart(
-				`Say: "I like you. What are we doing—casual, or building something?"`,
-				`"I’m feeling you. You on the same page or nah?"`,
-				"If they say ‘casual’, are you staying or dipping?",
-				vibe,
-				tone
-			);
-
-		case "intimacy":
-			return threePart(
-				`Say: "I’m into you. I want us to move at a pace that feels good for both."`,
-				`"What pace feels right for you?"`,
-				"Do you want more closeness, or more clarity first?",
-				vibe,
-				tone
-			);
-
-		case "what_to_say":
-			return threePart(
-				`Paste exactly what they said + what you want. I’ll write a clean 1–2 sentence text.`,
-				`Drop the last 2 messages and your goal—I got you.`,
-				"Is their energy warm, dry, or confusing?",
-				vibe,
-				tone
-			);
-
-		default:
-			return threePart(
-				`Tell me what happened in one sentence + what you want. I’ll tell you exactly what to say.`,
-				`Copy/paste the last message they sent.`,
-				"Are you trying to set a date, fix tension, or set a boundary?",
-				vibe,
-				tone
-			);
-	}
-}
-
-function inferIntent(text: string) {
-	const t = text.toLowerCase();
-	if (t.includes("ask") || t.includes("date") || t.includes("link") || t.includes("meet up") || t.includes("first date") ) return "ask_out";
-	if (t.includes("no response") || t.includes("ghost") || t.includes("no reply") || t.includes("left on read")) return "no_reply";
-	if (t.includes("sorry") || t.includes("my bad") || t.includes("apolog")) return "apology";
-	if (t.includes("fight") || t.includes("argue") || t.includes("mad")) return "conflict";
-	if (t.includes("cheat") || t.includes("lying") || t.includes("cheated")) return "trust";
-	if (t.includes("boundary") || t.includes("not cool") || t.includes("respect")) return "boundary";
-	if (t.includes("what do i say") || t.includes("reply") || t.includes("respond") || t.includes("what to say")) return "what_to_say";
-	if (t.includes("intimacy") || t.includes("sex") || t.includes("close") || t.includes("touch")) return "intimacy";
-	if (t.includes("what are we") || t.includes("define the relationship") || t.includes("dtr") || t.includes("are we")) return "define_relationship";
-	return "default";
-}
-
-function inferToneFromHistory(history?: SessionData["conversationHistory"]) {
-	if (!history || history.length === 0) return "confident" as Tone;
-	const recent = history.slice(-6).map((m) => m.content.toLowerCase()).join(" ");
-	if (recent.match(/😄|😂|lol|haha|:\)|:D/)) return "playful" as Tone;
-	if (recent.match(/sorry|i'm sorry|i am sorry|sad|hurt|missing you|miss you/)) return "sweet" as Tone;
-	if (recent.match(/what do you want|clarity|are we|are we doing|are you free|now\?|right now/)) return "direct" as Tone;
-	return "confident" as Tone;
-}
-
-// generateConversationalCoach replaced by coachRespond in coachEngine.ts
-
-// POST-only advice endpoint (conversational local coach)
-import { getEntitlements, incrementSparkCount, getDailyRemaining, setPremium } from "./entitlements";
-
-app.post("/api/advice", async (req, res) => {
-	const body = (req.body || {}) as AdviceRequest & { sessionId?: string; mode?: string };
-
-	const sessionId = body.sessionId || (req as any).sessionId;
-
-	if (!sessionId || typeof sessionId !== "string") {
-		return res.status(400).json({ error: "sessionId required (string)" });
-	}
-
-	if (!body.userMessage || typeof body.userMessage !== "string") {
-		return res.status(400).json({ error: "Missing userMessage (string)" });
-	}
-
-	const session = (req as any).sessionData as SessionData | undefined;
-
-	// store the incoming user message in both session (legacy) and memoryStore
-	try {
-		if (session) {
-			session.conversationHistory.push({ role: "user", content: body.userMessage });
-			if (session.conversationHistory.length > 10) {
-				session.conversationHistory = session.conversationHistory.slice(-10);
-			}
-		}
-	} catch (err) {
-		console.warn("session write error", err);
-	}
-
-		try {
-			pushTurn(sessionId, { role: "user", text: body.userMessage, ts: Date.now() });
-		} catch (err) {
-			console.warn("memoryStore push user error", err);
-		}
-
-		// Enforce daily limits based on entitlements (sessionId used as uid in prototype)
-		try {
-			const ent = getEntitlements(sessionId);
-			const remaining = getDailyRemaining(sessionId).dailyRemaining;
-			if (ent && !ent.isPremium && remaining <= 0) {
-				return res.status(429).json({ ok: false, code: "DAILY_LIMIT", message: "Free users are limited to 3 Spark conversations per day. Upgrade to Premium for unlimited access." });
-			}
-		} catch (err) {
-			console.warn('entitlements check failed', err);
-		}
-
-	// detect if user is premium to request advanced responses
-	const ent = getEntitlements(sessionId);
-	const advanced = !!(ent && ent.isPremium);
-	const data = await coachBrainV2({ sessionId, userMessage: body.userMessage, mode: (body as any).mode, advanced });
-
-	// store assistant reply into session and memoryStore
-	try {
-		if (session && typeof data?.message === "string") {
-			session.conversationHistory.push({ role: "assistant", content: data.message });
-			if (session.conversationHistory.length > 10) {
-				session.conversationHistory = session.conversationHistory.slice(-10);
-			}
-		}
-	} catch (err) {
-		console.warn("session write error", err);
-	}
-
-		try {
-			if (typeof data?.message === "string") {
-				pushTurn(sessionId, { role: "coach", text: data.message, ts: Date.now() });
-				// increment daily usage for non-premium users
-				try {
-					if (!(ent && ent.isPremium)) {
-						incrementSparkCount(sessionId, 1);
-					}
-				} catch (e) {
-					console.warn('increment spark count failed', e);
-				}
-			}
-		} catch (err) {
-			console.warn("memoryStore push coach error", err);
-		}
-
-	return res.json(data);
+// Debug routes to manually set/unset/check paid status for a token
+app.post('/api/debug/paid/set', express.json(), async (req, res) => {
+  const token = String(req.body?.token || '');
+  if (!token) return res.status(400).json({ ok: false, error: 'Missing token' });
+
+  await setPaid(token);
+  res.json({ ok: true, token, paid: true });
 });
 
-app.get("/api/health", (req, res) => {
-	res.json({ ok: true });
+app.post('/api/debug/paid/unset', express.json(), async (req, res) => {
+  const token = String(req.body?.token || '');
+  if (!token) return res.status(400).json({ ok: false, error: 'Missing token' });
+
+  await unsetPaid(token);
+  res.json({ ok: true, token, paid: false });
 });
 
-// Helper GET to make testing from browsers easier — POST is primary
-app.get("/api/advice", (_req, res) => {
-	res.status(200).json({
-		ok: true,
-		note: "This endpoint is POST-only. Send a POST request to /api/advice with JSON body.",
-	});
+app.get('/api/debug/paid/:token', async (req, res) => {
+  const token = String(req.params.token || '');
+  if (!token) return res.status(400).json({ ok: false, error: 'Missing token' });
+
+  const paid = await isPaid(token);
+  res.json({ ok: true, token, paid });
 });
 
-// Return entitlements for the current user (dev: accept sessionId via query or header)
+// Token init endpoint: ensure HttpOnly `sparkdd_token` cookie exists and return status
+app.post('/api/token', (req, res) => {
+  try {
+    const cookieName = 'sparkdd_token';
+    const existing = req.cookies && req.cookies[cookieName];
+    if (existing) return res.json({ ok: true, tokenSet: true });
+
+    const token = (globalThis.crypto && (globalThis.crypto as any).randomUUID ? (globalThis.crypto as any).randomUUID() : require('crypto').randomBytes(16).toString('hex'));
+    const secure = (process.env.NODE_ENV === 'production') || (req.hostname !== 'localhost' && req.hostname !== '127.0.0.1');
+    res.cookie(cookieName, token, { httpOnly: true, sameSite: 'lax', secure, maxAge: 1000 * 60 * 60 * 24 * 365, path: '/' });
+    return res.json({ ok: true, tokenSet: true });
+  } catch (e) {
+    console.warn('token init failed', e);
+    return res.status(500).json({ ok: false, error: 'token_init_failed' });
+  }
+});
+
+// Helper: read or create stable user id from sparkdd_token cookie
+async function getUserFromToken(req: any, res: any) {
+  const cookieName = 'sparkdd_token';
+  try {
+    let token = req.cookies && req.cookies[cookieName];
+    if (!token) {
+      token = (globalThis.crypto && (globalThis.crypto as any).randomUUID ? (globalThis.crypto as any).randomUUID() : require('crypto').randomBytes(16).toString('hex'));
+      const secure = (process.env.NODE_ENV === 'production') || (req.hostname !== 'localhost' && req.hostname !== '127.0.0.1');
+      res.cookie(cookieName, token, { httpOnly: true, sameSite: 'lax', secure, maxAge: 1000 * 60 * 60 * 24 * 365, path: '/' });
+    }
+    return { id: String(token) };
+  } catch (e) {
+    // fallback: generate an id but do not set cookie
+    const fallback = require('crypto').randomBytes(16).toString('hex');
+    return { id: fallback };
+  }
+}
+
+app.use('/api/advice', adviceRouter);
+
 app.get('/api/me/entitlements', (req, res) => {
-	const sessionId = (req.query.sessionId as string) || req.headers['x-session-id'] as string || (req as any).sessionId;
-	if (!sessionId) return res.status(400).json({ ok: false, error: 'sessionId required' });
-	try {
-		const ent = getEntitlements(sessionId);
-		const daily = getDailyRemaining(sessionId);
-		return res.json({ ok: true, plan: ent?.plan ?? 'free', isPremium: !!ent?.isPremium, dailyLimit: daily.dailyLimit, dailyUsed: daily.dailyUsed, dailyRemaining: daily.dailyRemaining, advanced: !!ent?.isPremium });
-	} catch (err) {
-		console.warn('entitlements fetch error', err);
-		return res.status(500).json({ ok: false, error: 'Failed to fetch entitlements' });
-	}
+  const sessionId = (req.query.sessionId as string) || req.headers['x-session-id'] as string;
+  if (!sessionId) return res.status(400).json({ ok: false, error: 'sessionId required' });
+  try {
+    const ent = getEntitlements(sessionId);
+    const daily = getDailyRemaining(sessionId);
+    return res.json({ ok: true, plan: ent?.plan ?? 'free', isPremium: !!ent?.isPremium, dailyLimit: daily.dailyLimit, dailyUsed: daily.dailyUsed, dailyRemaining: daily.dailyRemaining, advanced: !!ent?.isPremium, stripeCustomerId: ent?.stripeCustomerId ?? null, stripeSubscriptionId: ent?.stripeSubscriptionId ?? null, currentPeriodEnd: ent?.currentPeriodEnd ?? null });
+  } catch (err) {
+    console.warn('entitlements fetch error', err);
+    return res.status(500).json({ ok: false, error: 'Failed to fetch entitlements' });
+  }
 });
 
-// Dev-only admin route to set premium flag for a uid
+// Public entitlements endpoint (alias) for clients
+app.get('/api/entitlements', (req, res) => {
+  const sessionId = (req.query.sessionId as string) || req.headers['x-session-id'] as string;
+  if (!sessionId) return res.status(400).json({ ok: false, error: 'sessionId required' });
+  try {
+    const ent = getEntitlements(sessionId);
+    const daily = getDailyRemaining(sessionId);
+    return res.json({ ok: true, plan: ent?.plan ?? 'free', isPremium: !!ent?.isPremium, dailyLimit: daily.dailyLimit, dailyUsed: daily.dailyUsed, dailyRemaining: daily.dailyRemaining, advanced: !!ent?.isPremium, stripeCustomerId: ent?.stripeCustomerId ?? null, stripeSubscriptionId: ent?.stripeSubscriptionId ?? null, currentPeriodEnd: ent?.currentPeriodEnd ?? null });
+  } catch (err) {
+    console.warn('entitlements fetch error', err);
+    return res.status(500).json({ ok: false, error: 'Failed to fetch entitlements' });
+  }
+});
+
 app.post('/api/admin/set-premium', (req, res) => {
-	const { uid, isPremium } = req.body || {};
-	if (!uid) return res.status(400).json({ ok: false, error: 'uid required' });
-	try {
-		setPremium(uid, !!isPremium);
-		return res.json({ ok: true, uid, isPremium: !!isPremium });
-	} catch (err) {
-		console.warn('set-premium failed', err);
-		return res.status(500).json({ ok: false, error: 'Failed to set premium' });
-	}
+  const { uid, isPremium } = req.body || {};
+  if (!uid) return res.status(400).json({ ok: false, error: 'uid required' });
+  try {
+    setPremium(uid, !!isPremium);
+    return res.json({ ok: true, uid, isPremium: !!isPremium });
+  } catch (err) {
+    console.warn('set-premium failed', err);
+    return res.status(500).json({ ok: false, error: 'Failed to set premium' });
+  }
 });
 
 // Dev stub: create a checkout session and return a checkout URL.
 app.post('/api/checkout', async (req, res) => {
-	const sessionId = (req.body && (req.body as any).sessionId) || req.headers['x-session-id'] || (req as any).sessionId;
-	if (!sessionId) return res.status(400).json({ ok: false, error: 'sessionId required' });
+  const sessionId = (req.body && ((req.body as any).sessionId || (req.body as any).uid)) || req.headers['x-session-id'];
+  if (!sessionId) return res.status(400).json({ ok: false, error: 'sessionId required' });
 
-	// If Stripe not configured, return a dev stub URL
-	const stripeSecret = process.env.STRIPE_SECRET;
-	const priceId = process.env.STRIPE_PRICE_ID || 'price_1T2NLoAgdqex7SFJZCMoi7pv';
-	if (!stripeSecret || !priceId) {
-		const base = process.env.CHECKOUT_BASE || 'https://checkout.example.com';
-		const returnUrl = process.env.CHECKOUT_RETURN || 'http://localhost:5173';
-		const url = `${base}/?sessionId=${encodeURIComponent(String(sessionId))}&returnUrl=${encodeURIComponent(returnUrl)}`;
-		return res.json({ ok: true, url });
-	}
+  const stripeSecret = process.env.STRIPE_SECRET;
+  const priceId = process.env.STRIPE_PRICE_ID || 'price_1T2NLoAgdqex7SFJZCMoi7pv';
+  if (!stripeSecret || !priceId) {
+    const base = process.env.CHECKOUT_BASE || 'https://checkout.example.com';
+    const returnUrl = process.env.CHECKOUT_RETURN || `http://localhost:${process.env.PORT || 5173}`;
+    const url = `${base}/?sessionId=${encodeURIComponent(String(sessionId))}&returnUrl=${encodeURIComponent(returnUrl)}`;
+    return res.json({ ok: true, url });
+  }
 
-	try {
-		const Stripe = (await import('stripe')).default;
-		const stripe = new Stripe(stripeSecret, { apiVersion: '2022-11-15' });
-
-		const session = await stripe.checkout.sessions.create({
-			mode: 'subscription',
-			line_items: [{ price: priceId, quantity: 1 }],
-			client_reference_id: String(sessionId),
-			success_url: process.env.CHECKOUT_RETURN || 'http://localhost:5173/?session=success',
-			cancel_url: process.env.CHECKOUT_RETURN || 'http://localhost:5173/?session=cancel',
-		});
-
-		return res.json({ ok: true, url: session.url });
-	} catch (err) {
-		console.warn('checkout create failed', err);
-		return res.status(500).json({ ok: false, error: 'Failed to create checkout' });
-	}
+  try {
+    const Stripe = (await import('stripe')).default;
+    const stripe = new Stripe(stripeSecret, { apiVersion: '2022-11-15' });
+    const token = req.cookies?.ae_token || (req.body && req.body.token) || String(sessionId);
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      line_items: [{ price: priceId, quantity: 1 }],
+      client_reference_id: String(token || sessionId),
+      metadata: { token: String(token || '') },
+      success_url: process.env.CHECKOUT_RETURN || `http://localhost:${process.env.PORT || 5173}/?session=success`,
+      cancel_url: process.env.CHECKOUT_RETURN || `http://localhost:${process.env.PORT || 5173}/?session=cancel`,
+    });
+    return res.json({ ok: true, url: session.url });
+  } catch (err) {
+    console.warn('checkout create failed', err);
+    return res.status(500).json({ ok: false, error: 'Failed to create checkout' });
+  }
 });
 
-// Stripe webhook to confirm subscription completion and set premium entitlement
-app.post('/api/webhook', express.raw({ type: 'application/json' }), (req, res) => {
-	const sig = (req.headers['stripe-signature'] || '') as string;
-	const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-	if (!webhookSecret) return res.status(400).json({ ok: false, error: 'webhook not configured' });
-	try {
-		const Stripe = require('stripe');
-		const stripe = new Stripe(process.env.STRIPE_SECRET, { apiVersion: '2022-11-15' });
-		const event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
-		if (event.type === 'checkout.session.completed') {
-			const session = event.data.object as any;
-			const uid = session.client_reference_id || (session.metadata && session.metadata.sessionId);
-			if (uid) {
-				try {
-					setPremium(uid, true, 'premium');
-					console.log('Set premium for', uid);
-				} catch (e) {
-					console.warn('failed to set premium from webhook', e);
-				}
-			}
-		}
-		// respond 200 to acknowledge
-		res.json({ received: true });
-	} catch (err: any) {
-		console.warn('webhook handling error', err && err.message);
-		return res.status(400).json({ ok: false, error: 'invalid webhook event' });
-	}
+// Known-good Stripe checkout route: /api/billing/create-checkout-session
+app.post('/api/billing/create-checkout-session', async (req, res) => {
+  try {
+    const priceId = process.env.STRIPE_PRICE_ID;
+    const appUrl = process.env.APP_URL;
+
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return res.status(500).json({ error: 'Missing STRIPE_SECRET_KEY' });
+    }
+    if (!priceId) {
+      return res.status(500).json({ error: 'Missing STRIPE_PRICE_ID' });
+    }
+    if (!appUrl) {
+      return res.status(500).json({ error: 'Missing APP_URL' });
+    }
+
+    const StripeLib = (await import('stripe')).default;
+    const stripe = new StripeLib(process.env.STRIPE_SECRET_KEY! as string, ({ apiVersion: '2024-06-20' } as any));
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${appUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${appUrl}/upgrade`,
+    });
+
+    return res.json({ url: session.url });
+  } catch (e: any) {
+    return res.status(500).json({
+      error: e?.message || 'Stripe checkout creation failed',
+      type: e?.type,
+    });
+  }
 });
+
+
+
+// Legacy webhook path for compatibility
+app.post('/api/webhook', (req, res) => res.status(404).json({ ok: false, error: 'use /api/webhook/stripe' }));
 
 // Premium-only support route (dev): accessible only to premium users
 app.post('/api/support', (req, res) => {
-	const sessionId = (req.body && (req.body as any).sessionId) || req.headers['x-session-id'] || (req as any).sessionId;
-	if (!sessionId) return res.status(400).json({ ok: false, error: 'sessionId required' });
-	try {
-		const ent = getEntitlements(String(sessionId));
-		if (!ent || !ent.isPremium) return res.status(403).json({ ok: false, error: 'premium_required' });
-		return res.json({ ok: true, message: 'Priority support request received. We will respond shortly (dev stub).' });
-	} catch (err) {
-		console.warn('support error', err);
-		return res.status(500).json({ ok: false, error: 'support_failed' });
-	}
+  const sessionId = (req.body && (req.body as any).sessionId) || req.headers['x-session-id'];
+  if (!sessionId) return res.status(400).json({ ok: false, error: 'sessionId required' });
+  try {
+    const ent = getEntitlements(String(sessionId));
+    if (!ent || !ent.isPremium) return res.status(403).json({ ok: false, error: 'premium_required' });
+    return res.json({ ok: true, message: 'Priority support request received. We will respond shortly (dev stub).' });
+  } catch (err) {
+    console.warn('support error', err);
+    return res.status(500).json({ ok: false, error: 'support_failed' });
+  }
 });
 
-/* ===============================
-	START SERVER
-================================ */
+// Health check for Ollama: returns available models/tags
+app.get('/api/health/ollama', async (req, res) => {
+  try {
+    const url = `${OLLAMA_URL.replace(/\/$/, '')}/api/tags`;
+    const r = await fetch(url);
+    if (!r.ok) {
+      const t = await r.text().catch(() => '<no body>');
+      return res.status(502).json({ ok: false, error: 'ollama_unreachable', detail: t });
+    }
+    const data = await r.json().catch(() => null);
+    return res.json({ ok: true, models: data });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: 'failed', message: err && err.message });
+  }
+});
 
-// Railway (and other hosts) provide the port via env.PORT. Bind to 0.0.0.0
-// so the process is reachable from the network. Default to 8080 locally.
+// One-shot debug route to verify Stripe-related env vars and APP_URL
+app.get('/api/debug/stripe-env', (req, res) => {
+  res.json({
+    hasStripeKey: !!process.env.STRIPE_SECRET_KEY,
+    hasPriceId: !!process.env.STRIPE_PRICE_ID,
+    appUrl: process.env.APP_URL || null,
+  });
+});
+
+// Generic debug env route (useful for Railway / container checks)
+app.get('/api/debug/env', (req, res) => {
+  res.json({
+    hasStripeKey: !!process.env.STRIPE_SECRET_KEY,
+    hasPriceId: !!process.env.STRIPE_PRICE_ID,
+    appUrl: process.env.APP_URL || null,
+    nodeEnv: process.env.NODE_ENV || null,
+  });
+});
+
+// Debug cookies route to confirm cookie-parser is working
+app.get('/api/debug/cookies', (req, res) => {
+  res.json({ cookies: req.cookies || null });
+});
+
+// Basic health check for quick verification
+app.get('/api/debug/health', (req, res) => {
+  res.json({ ok: true });
+});
+
+// Root/info route
+app.get('/', (req, res) => {
+  res.send('Dating Advice API is running. Use /api/* endpoints.');
+});
+
+// Screenshot coach endpoint
+app.post('/api/screenshot-coach', upload.single('image'), async (req, res) => {
+  try {
+    // multer will populate req.file
+    const file = (req as any).file as any | undefined;
+    if (!file) return res.status(400).json({ ok: false, error: 'file_required' });
+
+    const allowed = ['image/png', 'image/jpeg', 'image/webp'];
+    if (!allowed.includes(file.mimetype)) return res.status(400).json({ ok: false, error: 'invalid_mime' });
+
+    // enforce size (multer also enforces limits)
+    if (file.size > 8 * 1024 * 1024) return res.status(400).json({ ok: false, error: 'file_too_large' });
+
+    const note = (req.body && (req.body as any).note) ? String((req.body as any).note) : '';
+
+    const base64 = file.buffer.toString('base64');
+    // Send images as data URIs so vision-capable models reliably recognize them
+    const imageDataUri = `data:${file.mimetype};base64,${base64}`;
+
+    const systemPrompt = `You are Sparkd, a dating coach who talks like a real friend: confident, warm, slightly playful, never robotic. You read screenshots of texts/DMs and give concrete, specific advice. Treat any image provided as if the text in that image had been pasted directly — extract and interpret the text and speaker turns. You always:
+  1) Briefly summarize what’s happening
+  2) Tell the user what the other person’s vibe/intent seems to be (if inferable)
+  3) Give a clear plan (what to do next + timing)
+  4) Provide 1 best copy/paste reply + 2 alternate replies in different tones (playful/direct)
+  5) Give 1 short warning (what NOT to say/do)
+  Only ask one clarifying question if absolutely necessary.
+  If the screenshot shows abuse/harassment or unsafe behavior, prioritize safety and boundaries.`;
+
+    const userContent = `User note: ${note}\n\nYou will receive a screenshot image; extract the textual conversation and speaker turns from the image and treat that extracted text exactly like pasted text from the user. Read the screenshot and coach me. Reply in natural text and output a JSON object with keys: summary, vibe, advice, best_reply, alt_replies (array of 2), warning, question (or null). Keep replies copy/paste ready.`;
+
+    const body = {
+      model: OLLAMA_VISION_MODEL,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent, images: [imageDataUri] }
+      ],
+      stream: false,
+    };
+
+    let resp: any;
+    try {
+      // Debug: log the system prompt being sent to Ollama to ensure prompt changes are applied
+      try { console.log("SYSTEM PROMPT BEING SENT:"); console.log(systemPrompt); } catch (e) { /* ignore logging errors */ }
+      resp = await callOllamaChat(body);
+    } catch (e) {
+      // fallback to /api/generate
+      try {
+        try { console.log("SYSTEM PROMPT BEING SENT (generate):"); console.log(systemPrompt); } catch (e) { /* ignore logging errors */ }
+        resp = await callOllamaGenerate(body);
+      } catch (e2) {
+        console.warn('ollama both endpoints failed', e, e2);
+        return res.status(502).json({ ok: false, error: 'ollama_failed', message: String(e) });
+      }
+    }
+
+    const text = extractTextFromOllamaResponse(resp) || '';
+    // log a snippet of the model output to help debug why JSON parsing may fail
+    try { console.debug('screenshot-coach: model output (snippet):', String(text).substring(0,1000)); } catch (e) { /* ignore */ }
+
+    // Try to parse JSON out of the model output
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(text.trim());
+    } catch (_) {
+      // attempt to extract first JSON object inside the text
+      const m = text.match(/\{[\s\S]*\}/);
+      if (m) {
+        try { parsed = JSON.parse(m[0]); } catch (_) { parsed = null; }
+      }
+    }
+
+    const out = {
+      ok: true,
+      summary: parsed?.summary ?? (text.substring(0, 400)),
+      vibe: parsed?.vibe ?? null,
+      advice: parsed?.advice ?? null,
+      best_reply: parsed?.best_reply ?? null,
+      alt_replies: parsed?.alt_replies ?? (Array.isArray(parsed?.alt_replies) ? parsed.alt_replies : (parsed?.alternates || [])),
+      warning: parsed?.warning ?? null,
+      question: parsed?.question ?? null,
+      raw: resp,
+    };
+
+    return res.json(out);
+  } catch (err: any) {
+    console.warn('screenshot-coach error', err);
+    return res.status(500).json({ ok: false, error: 'server_error', message: err && err.message });
+  }
+});
+
+// POST /api/chat - always call Ollama and return raw reply
+app.post('/api/chat', express.json(), async (req, res) => {
+  try {
+    const message = String(req.body?.message || req.body?.text || req.body?.userMessage || '');
+    const mode = String(req.body?.mode || 'dating');
+    const tone = String(req.body?.tone || '');
+    if (!message.trim()) return res.status(400).json({ ok: false, error: 'EMPTY_INPUT' });
+
+    // identify user
+    const user = await getUserFromToken(req, res);
+    const userId = user.id;
+
+    let isPremium = false;
+    try {
+      const v: any = await (redisClient as any).get(`user:${userId}:premium`);
+      isPremium = String(v) === 'true' || String(v) === '1';
+    } catch (e) {
+      console.warn('redis get premium failed', e);
+      // fail-open: treat as non-premium but do not block
+      isPremium = false;
+    }
+
+    let used = 0;
+    let remaining: number | null = null;
+
+    if (!isPremium) {
+      try {
+        const today = new Date();
+        const dateKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+        const key = `user:${userId}:daily_count:${dateKey}`;
+        const n: any = await (redisClient as any).incr(key);
+        used = Number(n ?? 0);
+        // set TTL to midnight on first use
+        if (used === 1) {
+          try {
+            const ttl = secondsUntilMidnightLocal();
+            await (redisClient as any).expire(key, ttl);
+          } catch (e) {
+            /* ignore */
+          }
+        }
+        remaining = Math.max(0, FREE_DAILY_LIMIT - used);
+        if (used > FREE_DAILY_LIMIT) {
+          return res.json({ ok: false, paywall: true, message: "You're out of responses for today.", tease: "I can help you craft the exact message to send… and predict how they'll respond.", limit: FREE_DAILY_LIMIT, usage: { remaining: 0, isPremium: false } });
+        }
+      } catch (e) {
+        console.warn('redis daily_count failed', e);
+      }
+    }
+
+    // build system prompt depending on premium
+    const baseSystem = `You are Sparkd, a helpful dating coach. Reply concisely with situation-aware, empathetic, and actionable advice.`;
+    const premiumExtra = isPremium ? ` When responding, provide deeper emotional analysis, attachment style read, red/green flags, follow-up sequence, and multiple rewrite options. Use structured sections.` : '';
+    const systemPrompt = `${baseSystem}${premiumExtra} Match the user's requested mode (${mode}).`;
+
+    const body = {
+      model: process.env.OLLAMA_MODEL || 'gemma3:4b',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: message }
+      ],
+      temperature: isPremium ? 0.95 : 0.85,
+      top_p: isPremium ? 0.9 : 0.9,
+      repeat_penalty: isPremium ? 1.25 : 1.15,
+      num_ctx: 4096,
+      stream: false,
+      options: { temperature: isPremium ? 0.95 : 0.85, top_p: 0.9, repeat_penalty: isPremium ? 1.25 : 1.15, num_ctx: 4096 }
+    } as any;
+
+    // include tone in the user text for premium mode
+    if (tone && isPremium) {
+      body.messages.push({ role: 'system', content: `Apply user-selected tone: ${tone}. Keep examples and rewrites in that tone.` });
+    }
+
+    console.log('OLLAMA model:', body.model);
+    console.log('USER:', message.slice(0, 1000));
+
+    let resp: any;
+    try {
+      resp = await callOllamaChat(body);
+    } catch (e) {
+      try {
+        resp = await callOllamaGenerate(body);
+      } catch (e2) {
+        console.error('[api/chat] ollama call failed', e, e2);
+        return res.status(500).json({ ok: false, error: 'OLLAMA_UNREACHABLE', details: String(e) });
+      }
+    }
+
+    // Ensure only text is returned
+    const reply = (resp && resp.message && (typeof resp.message.content === 'string' ? resp.message.content : resp.message.content ?? '')) || extractTextFromOllamaResponse(resp) || '';
+
+    return res.json({ ok: true, reply, usage: { remaining: isPremium ? null : Math.max(0, FREE_DAILY_LIMIT - used), isPremium } });
+  } catch (err: any) {
+    console.error('[api/chat] error', err);
+    return res.status(500).json({ ok: false, error: err?.message || String(err) });
+  }
+});
+
+// POST /api/chat/init - generate a warm, human opener using Ollama (gemma3:4b)
+app.post('/api/chat/init', express.json(), async (req, res) => {
+  try {
+    const systemPrompt = `You are Sparkdd, a modern dating coach.\nYour job is to start the conversation in a natural, warm, human way.\nDo NOT give advice yet.\nAsk one engaging question that invites the user to explain their situation.\nKeep it short (1–2 sentences max).\nNo generic therapy tone.\nNo clichés.\nVary the style every time.\nAvoid repeating the same structure across sessions.`;
+
+    const body = {
+      model: 'gemma3:4b',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: 'Start the session with a short, human opener. Ask one question only.' }
+      ],
+      temperature: 0.95,
+      top_p: 0.9,
+      repeat_penalty: 1.25,
+      num_ctx: 4096,
+      stream: false,
+    } as any;
+
+    let resp: any;
+    try {
+      resp = await callOllamaChat(body);
+    } catch (e) {
+      try {
+        resp = await callOllamaGenerate(body);
+      } catch (e2) {
+        console.error('[api/chat/init] ollama call failed', e, e2);
+        return res.status(502).json({ ok: false, error: 'OLLAMA_UNREACHABLE' });
+      }
+    }
+
+    // identify user and report usage (do not consume counter)
+    let isPremium = false;
+    try {
+      const user = await getUserFromToken(req, res);
+      const v: any = await (redisClient as any).get(`user:${user.id}:premium`);
+      isPremium = String(v) === 'true' || String(v) === '1';
+    } catch (e) {
+      console.warn('failed to determine premium for init', e);
+      isPremium = false;
+    }
+
+    const reply = (resp && resp.message && (typeof resp.message.content === 'string' ? resp.message.content : resp.message.content ?? '')) || extractTextFromOllamaResponse(resp) || '';
+
+    // compute remaining without incrementing
+    let remaining: number | null = null;
+    try {
+      if (!isPremium) {
+        const now = new Date();
+        const dateKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const key = `user:${(await getUserFromToken(req, res)).id}:daily_count:${dateKey}`;
+        const v: any = await (redisClient as any).get(key);
+        const used = Number(v ?? 0);
+        remaining = Math.max(0, FREE_DAILY_LIMIT - used);
+      }
+    } catch (e) {
+      remaining = null;
+    }
+
+    return res.json({ ok: true, reply, usage: { remaining: isPremium ? null : remaining, isPremium } });
+  } catch (err: any) {
+    console.error('[api/chat/init] error', err);
+    return res.status(500).json({ ok: false, error: err?.message || String(err) });
+  }
+});
+
+// Debug route to list Ollama tags/models
+app.get('/api/debug/ollama', async (req, res) => {
+  try {
+    const url = `${OLLAMA_URL.replace(/\/$/, '')}/api/tags`;
+    const r = await fetch(url);
+    if (!r.ok) {
+      const t = await r.text().catch(() => '<no body>');
+      return res.status(502).json({ ok: false, error: 'ollama_unreachable', detail: t });
+    }
+    const data = await r.json().catch(() => null);
+    return res.json({ ok: true, models: data });
+  } catch (err: any) {
+    console.error('[api/debug/ollama] failed', err);
+    return res.status(500).json({ ok: false, error: 'failed', message: err && err.message });
+  }
+});
+
 const PORT = Number(process.env.PORT) || 8080;
-const HOST = process.env.HOST || "0.0.0.0";
 
-const server = app.listen(PORT, HOST, () => {
-	console.log(`Dating Advice API listening on http://${HOST}:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Dating Advice API listening on 0.0.0.0:${PORT}`);
 });
-
-// Graceful shutdown: allow Railway to SIGTERM the process and close server cleanly.
-function shutdown(signal: string) {
-	console.log(`Received ${signal}. Closing server...`);
-	try {
-		server.close(() => {
-			console.log('Server closed. Exiting.');
-			// do not call process.exit() here; let the platform handle shutdown.
-		});
-		// Force exit if shutdown hangs
-		setTimeout(() => {
-			console.error('Shutdown timeout, forcing exit.');
-			process.exit(1);
-		}, 10000).unref();
-	} catch (err) {
-		console.error('Error during shutdown', err);
-		process.exit(1);
-	}
-}
-
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
