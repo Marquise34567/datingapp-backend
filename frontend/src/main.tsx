@@ -6,12 +6,8 @@ import "./index.css";
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    {/* If maintenance mode is enabled, render the maintenance page as the only UI */}
-    {((import.meta.env.VITE_MAINTENANCE_MODE || "").toLowerCase() === "true") ? (
-      <MaintenanceOverlay />
-    ) : (
-      <PremiumDatingAdvicePage />
-    )}
+    {/* Render maintenance page as the only UI until removed */}
+    <MaintenanceOverlay />
   </React.StrictMode>
 );
  
