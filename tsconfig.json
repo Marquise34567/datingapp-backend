@@ -12,4 +12,6 @@
     "skipLibCheck": true
   },
   "include": ["src/**/*"]
+  ,
+  "exclude": ["node_modules", "frontend", "**/*.tsx", "**/*.jsx"]
 }
