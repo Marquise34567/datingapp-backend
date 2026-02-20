@@ -2,7 +2,7 @@ import React from "react";
 
 export default function Maintenance() {
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-gradient-to-b from-zinc-900/75 to-zinc-900/85 backdrop-blur-md">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 backdrop-blur-2xl pointer-events-auto">
       <div className="mx-4 w-full max-w-2xl rounded-3xl bg-gradient-to-br from-white/6 to-white/4 border border-white/8 p-10 shadow-2xl">
         <div className="flex items-center gap-4">
           <img src="/sparkdd-favicon.svg" alt="Sparkd" className="h-14 w-14 rounded-lg shadow-md" />
