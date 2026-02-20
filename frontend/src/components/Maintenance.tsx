@@ -1,6 +1,37 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
+
+const FIVE_MINUTES_MS = 5 * 60 * 1000;
 
 export default function Maintenance() {
+  const [remainingMs, setRemainingMs] = useState<number>(FIVE_MINUTES_MS);
+  const [hidden, setHidden] = useState<boolean>(false);
+
+  useEffect(() => {
+    const end = Date.now() + FIVE_MINUTES_MS;
+
+    const tick = () => {
+      const rem = Math.max(0, end - Date.now());
+      setRemainingMs(rem);
+      if (rem === 0) setHidden(true);
+    };
+
+    tick();
+    const iv = setInterval(tick, 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  if (hidden) return null;
+
+  const formatMs = (ms: number) => {
+    const totalSeconds = Math.ceil(ms / 1000);
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+  };
+
+  const backTime = new Date(Date.now() + remainingMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-gradient-to-b from-zinc-900/70 to-zinc-900/80 backdrop-blur-md">
       <div className="mx-4 w-full max-w-2xl rounded-3xl bg-gradient-to-br from-white/5 to-white/3 border border-white/8 p-10 shadow-2xl backdrop-blur-sm">
@@ -19,13 +50,13 @@ export default function Maintenance() {
         </div>
 
         <div className="mt-6 flex items-center justify-between">
-          <div className="text-sm text-zinc-400">Estimated downtime: ~10 minutes</div>
+          <div className="text-sm text-zinc-400">Estimated remaining: {formatMs(remainingMs)} — back by {backTime}</div>
           <div className="flex items-center gap-3">
             <a href="#" onClick={(e) => e.preventDefault()} className="inline-flex items-center gap-2 rounded-full bg-amber-500 px-4 py-2 text-sm font-semibold text-zinc-900 hover:brightness-105">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5"/></svg>
               Check status
             </a>
-            <a href="/" className="text-sm text-zinc-300 underline" >Return home</a>
+            <a href="/" className="text-sm text-zinc-300 underline">Return home</a>
           </div>
         </div>
       </div>
