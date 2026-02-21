@@ -149,8 +149,8 @@ async function fetchOllamaReply(body) {
 const app = (0, express_1.default)();
 // Trust proxy so secure cookies work behind tunnels/proxies
 app.set('trust proxy', 1);
-// CORS: allow sparkdd.live plus any additional origins set in ALLOWED_ORIGINS
-const DEFAULT_ALLOWED = ['https://sparkdd.live'];
+// CORS: allow sparkdd.live (with and without www) plus any additional origins set in ALLOWED_ORIGINS
+const DEFAULT_ALLOWED = ['https://sparkdd.live', 'https://www.sparkdd.live'];
 const envOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
 const allowedOrigins = Array.from(new Set([...DEFAULT_ALLOWED, ...envOrigins]));
 console.log('CORS allowed origins:', allowedOrigins);
