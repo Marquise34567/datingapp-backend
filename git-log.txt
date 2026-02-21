@@ -1,0 +1,2 @@
+Initialized empty Git repository in C:/Users/Quise/name1/backend-cors-push/backend/.git/
+Switched to a new branch 'fix/cors-allow-sparkdd'
